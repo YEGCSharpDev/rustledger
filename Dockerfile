@@ -31,5 +31,5 @@ COPY --from=builder /usr/src/rustledger/target/release/rledger-* /usr/local/bin/
      ln -s /usr/local/bin/rledger-query /usr/local/bin/bean-query && \
      ln -s /usr/local/bin/rledger-report /usr/local/bin/bean-report
 
-ENTRYPOINT ["rledger-query"]
-CMD ["--help"]
+#removing entry point, using container like a toolbox
+CMD ["rledger-query", "--help"]
