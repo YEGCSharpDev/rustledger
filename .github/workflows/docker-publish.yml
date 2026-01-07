@@ -22,5 +22,4 @@ jobs:
         with:
           context: .
           push: true
-          # Replace 'yegcsharpdev' with your actual Docker Hub username if different
-          tags: yegcsharpdev/rustledger:latest
+          tags: preface8675/rustledger:latest
