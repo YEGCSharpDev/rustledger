@@ -6,6 +6,8 @@
 pub mod check;
 pub mod completions;
 pub mod doctor;
+pub mod extract_cmd;
 pub mod format;
+pub mod price_cmd;
 pub mod query;
 pub mod report_cmd;

@@ -12,6 +12,9 @@ categories.workspace = true
 authors.workspace = true
 readme = "../../README.md"
 
+[lib]
+bench = false
+
 [features]
 default = ["bean-compat"]
 # Include bean-* binaries for backwards compatibility with Python beancount.
@@ -39,6 +42,14 @@ path = "src/bin/rledger_report.rs"
 name = "rledger-doctor"
 path = "src/bin/rledger_doctor.rs"
 
+[[bin]]
+name = "rledger-extract"
+path = "src/bin/rledger_extract.rs"
+
+[[bin]]
+name = "rledger-price"
+path = "src/bin/rledger_price.rs"
+
 # Compatibility binaries (installed by default, opt-out with --no-default-features)
 [[bin]]
 name = "bean-check"
@@ -65,6 +76,16 @@ name = "bean-doctor"
 path = "src/bin/bean_doctor.rs"
 required-features = ["bean-compat"]
 
+[[bin]]
+name = "bean-extract"
+path = "src/bin/bean_extract.rs"
+required-features = ["bean-compat"]
+
+[[bin]]
+name = "bean-price"
+path = "src/bin/bean_price.rs"
+required-features = ["bean-compat"]
+
 [dependencies]
 rustledger-core.workspace = true
 rustledger-parser.workspace = true
@@ -73,6 +94,7 @@ rustledger-booking.workspace = true
 rustledger-validate.workspace = true
 rustledger-query.workspace = true
 rustledger-plugin = { workspace = true, features = ["wasm-runtime"] }
+rustledger-importer.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
 rustyline.workspace = true
@@ -83,9 +105,10 @@ anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 rust_decimal.workspace = true
+chrono.workspace = true
+ureq.workspace = true
 
 [dev-dependencies]
-chrono.workspace = true
 rust_decimal_macros.workspace = true
 criterion.workspace = true
 

@@ -12,6 +12,9 @@ categories.workspace = true
 authors.workspace = true
 readme = "../../README.md"
 
+[lib]
+bench = false
+
 [dependencies]
 rustledger-core.workspace = true
 rustledger-booking.workspace = true
@@ -22,6 +25,7 @@ chrono.workspace = true
 [dev-dependencies]
 rust_decimal_macros = "1.36"
 criterion.workspace = true
+proptest.workspace = true
 
 [[bench]]
 name = "validate_bench"
