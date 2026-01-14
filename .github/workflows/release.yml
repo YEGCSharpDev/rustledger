@@ -1,4 +1,46 @@
-# Release workflow - builds binaries for all platforms
+# Release Workflow
+# ================
+# Triggered on version tags (v*). Builds and publishes to all distribution channels.
+#
+# RELEASE STRATEGY
+# ----------------
+# Prereleases (e.g., v1.0.0-rc.19):
+#   - GitHub Releases: ✓
+#   - crates.io: ✓
+#   - npm: ✓ (tagged as "next", not "latest")
+#   - Docker: ✓ (version tag only, no "latest")
+#   - Homebrew tap: ✓ (rustledger/homebrew-rustledger)
+#   - Scoop bucket: ✓ (rustledger/scoop-rustledger)
+#   - AUR: ✓ (user repository)
+#   - nixpkgs: ✗ (skipped)
+#
+# Stable releases (e.g., v1.0.0):
+#   - All of the above, plus:
+#   - npm: tagged as "latest"
+#   - Docker: tagged as "latest"
+#   - nixpkgs: PR created automatically
+#
+# DISTRIBUTION CHANNELS
+# ---------------------
+# | Channel      | Repo/Registry                          | Auto-update |
+# |--------------|----------------------------------------|-------------|
+# | Binaries     | GitHub Releases                        | ✓           |
+# | Cargo        | crates.io                              | ✓           |
+# | npm (wasm)   | @rustledger/wasm                       | ✓           |
+# | npm (mcp)    | @rustledger/mcp-server                 | ✓           |
+# | Docker       | ghcr.io/rustledger/rustledger          | ✓           |
+# | Homebrew     | rustledger/homebrew-rustledger         | ✓           |
+# | Scoop        | rustledger/scoop-rustledger            | ✓           |
+# | AUR          | aur.archlinux.org/rustledger{,-bin}    | ✓           |
+# | nixpkgs      | NixOS/nixpkgs (PR)                     | ✓ (stable)  |
+#
+# SECRETS REQUIRED
+# ----------------
+# - CARGO_REGISTRY_TOKEN: crates.io publish
+# - WEBSITE_DISPATCH_TOKEN: Homebrew/Scoop/nixpkgs automation
+# - AUR_SSH_PRIVATE_KEY: AUR push access
+# - (npm uses OIDC trusted publishing, no token needed)
+#
 name: Release
 on:
   push:
