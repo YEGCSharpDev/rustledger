@@ -769,15 +769,17 @@ jobs:
 
           # Update changelog for each Ubuntu series
           for SERIES in noble jammy focal; do
-            # Update changelog
-            CHANGES="rustledger (${DEB_VERSION}-1~${SERIES}1) ${SERIES}; urgency=medium
+            # Update changelog using heredoc to avoid YAML issues
+            cat > /tmp/changelog_entry << CHLOG
+          rustledger (${DEB_VERSION}-1~${SERIES}1) ${SERIES}; urgency=medium
 
-  * Update to version ${VERSION}
+            * Update to version ${VERSION}
 
- -- rustledger <rustledger@users.noreply.github.com>  $(date -R)
+           -- rustledger <rustledger@users.noreply.github.com>  $(date -R)
 
-"
-            echo -e "${CHANGES}\n$(cat debian/changelog)" > debian/changelog
+          CHLOG
+            cat /tmp/changelog_entry debian/changelog > /tmp/new_changelog
+            mv /tmp/new_changelog debian/changelog
 
             # Build source package
             debuild -S -sa -k"$(gpg --list-secret-keys --keyid-format LONG | grep sec | head -1 | awk '{print $2}' | cut -d'/' -f2)"
