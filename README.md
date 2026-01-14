@@ -77,6 +77,8 @@ wasm-pack build crates/rustledger-wasm --target web
 | `rledger-query` | Run BQL queries (interactive shell or one-shot) |
 | `rledger-report` | Generate balance, account, and statistics reports |
 | `rledger-doctor` | Debugging tools: context, linked transactions, missing opens |
+| `rledger-extract` | Import transactions from CSV/OFX bank statements |
+| `rledger-price` | Fetch commodity prices from online sources |
 
 ### Examples
 
@@ -116,6 +118,26 @@ bean-query ledger.beancount "SELECT ..."
 bean-report ledger.beancount balances
 bean-doctor ledger.beancount context 42
 ```
+
+### Shell Completions
+
+All CLI commands support generating shell completions:
+
+```bash
+# Bash (add to ~/.bashrc)
+rledger-check --generate-completions bash >> ~/.bashrc
+
+# Zsh (add to ~/.zshrc)
+rledger-check --generate-completions zsh >> ~/.zshrc
+
+# Fish
+rledger-check --generate-completions fish > ~/.config/fish/completions/rledger-check.fish
+
+# PowerShell
+rledger-check --generate-completions powershell >> $PROFILE
+```
+
+Generate completions for each command you use (`rledger-check`, `rledger-query`, etc.).
 
 ## Library Usage
 

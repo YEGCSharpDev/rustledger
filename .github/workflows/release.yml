@@ -38,6 +38,8 @@ jobs:
           # Windows
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
@@ -67,8 +69,8 @@ jobs:
           # Create archive with all binaries
           ARCHIVE="rustledger-${VERSION}-${{ matrix.target }}.tar.gz"
           tar -czvf "../../../${ARCHIVE}" \
-            rledger-check rledger-format rledger-query rledger-report rledger-doctor \
-            bean-check bean-format bean-query bean-report bean-doctor
+            rledger-check rledger-format rledger-query rledger-report rledger-doctor rledger-extract rledger-price \
+            bean-check bean-format bean-query bean-report bean-doctor bean-extract bean-price
 
           # Create checksum
           cd ../../..
@@ -85,8 +87,8 @@ jobs:
           # Create archive with all binaries
           $ARCHIVE = "rustledger-${VERSION}-${{ matrix.target }}.zip"
           $binaries = @(
-            "rledger-check.exe", "rledger-format.exe", "rledger-query.exe", "rledger-report.exe", "rledger-doctor.exe",
-            "bean-check.exe", "bean-format.exe", "bean-query.exe", "bean-report.exe", "bean-doctor.exe"
+            "rledger-check.exe", "rledger-format.exe", "rledger-query.exe", "rledger-report.exe", "rledger-doctor.exe", "rledger-extract.exe", "rledger-price.exe",
+            "bean-check.exe", "bean-format.exe", "bean-query.exe", "bean-report.exe", "bean-doctor.exe", "bean-extract.exe", "bean-price.exe"
           )
           Compress-Archive -Path $binaries -DestinationPath "../../../${ARCHIVE}"
 
@@ -172,6 +174,42 @@ jobs:
           cargo publish -p rustledger --no-verify || true
 
           echo "All crates published!"
+  # Build and upload WASM to GitHub release
+  upload-wasm:
+    name: Upload WASM to Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Build WASM package
+        run: |
+          cd crates/rustledger-wasm
+          wasm-pack build --target web --release
+      - name: Package WASM
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          cd crates/rustledger-wasm/pkg
+          # Update package.json version
+          sed -i "s/\"version\": \".*\"/\"version\": \"${VERSION#v}\"/" package.json
+          sed -i 's/"name": "rustledger-wasm"/"name": "@rustledger\/wasm"/' package.json
+          # Create archive
+          tar -czvf "../../../rustledger-wasm-${VERSION}.tar.gz" .
+          cd ../../..
+          shasum -a 256 "rustledger-wasm-${VERSION}.tar.gz" > "rustledger-wasm-${VERSION}.tar.gz.sha256"
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            rustledger-wasm-*.tar.gz
+            rustledger-wasm-*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   # Publish WASM package to npm
   publish-wasm:
     name: Publish to npm
