@@ -157,11 +157,15 @@ pub fn is_balanced(transaction: &Transaction, tolerances: &HashMap<InternedStr, 
 mod tests {
     use super::*;
     use rust_decimal_macros::dec;
-    use rustledger_core::{NaiveDate, Posting};
+    use rustledger_core::{CostSpec, IncompleteAmount, NaiveDate, Posting, PriceAnnotation};
 
     fn date(year: i32, month: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(year, month, day).unwrap()
     }
+
+    // =========================================================================
+    // Basic residual tests (existing)
+    // =========================================================================
 
     #[test]
     fn test_calculate_residual_balanced() {
@@ -250,5 +254,368 @@ mod tests {
         // USD should use the max tolerance (0.5 from scale 0)
         assert_eq!(tolerances.get("USD"), Some(&dec!(0.5)));
         assert_eq!(tolerances.get("EUR"), Some(&dec!(0.0005)));
+    }
+
+    // =========================================================================
+    // Cost-based residual tests
+    // =========================================================================
+
+    /// Test residual calculation with per-unit cost.
+    /// Buy 10 AAPL at $150 each = $1500 total cost in USD.
+    #[test]
+    fn test_calculate_residual_with_per_unit_cost() {
+        let txn = Transaction::new(date(2024, 1, 15), "Buy stock")
+            .with_posting(
+                Posting::new("Assets:Stock", Amount::new(dec!(10), "AAPL")).with_cost(
+                    CostSpec::empty()
+                        .with_number_per(dec!(150.00))
+                        .with_currency("USD"),
+                ),
+            )
+            .with_posting(Posting::new(
+                "Assets:Cash",
+                Amount::new(dec!(-1500.00), "USD"),
+            ));
+
+        let residual = calculate_residual(&txn);
+        // Cost posting contributes 10 * 150 = 1500 USD
+        // Cash posting contributes -1500 USD
+        // Residual should be 0
+        assert_eq!(residual.get("USD"), Some(&dec!(0)));
+        // AAPL should not appear in residuals (cost converts to USD)
+        assert_eq!(residual.get("AAPL"), None);
+    }
+
+    /// Test residual calculation with total cost.
+    /// Buy 10 AAPL with total cost of $1500.
+    #[test]
+    fn test_calculate_residual_with_total_cost() {
+        let txn = Transaction::new(date(2024, 1, 15), "Buy stock")
+            .with_posting(
+                Posting::new("Assets:Stock", Amount::new(dec!(10), "AAPL")).with_cost(
+                    CostSpec::empty()
+                        .with_number_total(dec!(1500.00))
+                        .with_currency("USD"),
+                ),
+            )
+            .with_posting(Posting::new(
+                "Assets:Cash",
+                Amount::new(dec!(-1500.00), "USD"),
+            ));
+
+        let residual = calculate_residual(&txn);
+        // Total cost posting contributes 1500 * signum(10) = 1500 USD
+        // Cash posting contributes -1500 USD
+        assert_eq!(residual.get("USD"), Some(&dec!(0)));
+    }
+
+    /// Test residual calculation with total cost and negative units (sell).
+    #[test]
+    fn test_calculate_residual_with_total_cost_negative_units() {
+        let txn = Transaction::new(date(2024, 1, 15), "Sell stock")
+            .with_posting(
+                Posting::new("Assets:Stock", Amount::new(dec!(-10), "AAPL")).with_cost(
+                    CostSpec::empty()
+                        .with_number_total(dec!(1500.00))
+                        .with_currency("USD"),
+                ),
+            )
+            .with_posting(Posting::new(
+                "Assets:Cash",
+                Amount::new(dec!(1500.00), "USD"),
+            ));
+
+        let residual = calculate_residual(&txn);
+        // Total cost with negative units: 1500 * signum(-10) = -1500 USD
+        // Cash posting contributes +1500 USD
+        assert_eq!(residual.get("USD"), Some(&dec!(0)));
+    }
+
+    /// Test cost spec without amount/currency falls back to units.
+    #[test]
+    fn test_calculate_residual_cost_without_amount_falls_back() {
+        let txn = Transaction::new(date(2024, 1, 15), "Test")
+            .with_posting(
+                Posting::new("Assets:Stock", Amount::new(dec!(10), "AAPL"))
+                    .with_cost(CostSpec::empty()), // Empty cost spec
+            )
+            .with_posting(Posting::new("Assets:Cash", Amount::new(dec!(-10), "AAPL")));
+
+        let residual = calculate_residual(&txn);
+        // Falls back to units: 10 AAPL + -10 AAPL = 0
+        assert_eq!(residual.get("AAPL"), Some(&dec!(0)));
+    }
+
+    // =========================================================================
+    // Price annotation residual tests
+    // =========================================================================
+
+    /// Test residual with per-unit price annotation (@).
+    /// -100 USD @ 0.85 EUR means we're converting 100 USD to EUR at 0.85 rate.
+    #[test]
+    fn test_calculate_residual_with_unit_price() {
+        let txn = Transaction::new(date(2024, 1, 15), "Currency exchange")
+            .with_posting(
+                Posting::new("Assets:USD", Amount::new(dec!(-100.00), "USD"))
+                    .with_price(PriceAnnotation::Unit(Amount::new(dec!(0.85), "EUR"))),
+            )
+            .with_posting(Posting::new("Assets:EUR", Amount::new(dec!(85.00), "EUR")));
+
+        let residual = calculate_residual(&txn);
+        // Price posting: |-100| * 0.85 * signum(-100) = -85 EUR
+        // EUR posting: +85 EUR
+        // Total: 0 EUR
+        assert_eq!(residual.get("EUR"), Some(&dec!(0)));
+        // USD should not appear (converted to EUR)
+        assert_eq!(residual.get("USD"), None);
+    }
+
+    /// Test residual with total price annotation (@@).
+    #[test]
+    fn test_calculate_residual_with_total_price() {
+        let txn = Transaction::new(date(2024, 1, 15), "Currency exchange")
+            .with_posting(
+                Posting::new("Assets:USD", Amount::new(dec!(-100.00), "USD"))
+                    .with_price(PriceAnnotation::Total(Amount::new(dec!(85.00), "EUR"))),
+            )
+            .with_posting(Posting::new("Assets:EUR", Amount::new(dec!(85.00), "EUR")));
+
+        let residual = calculate_residual(&txn);
+        // Total price: 85 * signum(-100) = -85 EUR
+        // EUR posting: +85 EUR
+        assert_eq!(residual.get("EUR"), Some(&dec!(0)));
+    }
+
+    /// Test residual with positive units and unit price.
+    #[test]
+    fn test_calculate_residual_with_unit_price_positive() {
+        let txn = Transaction::new(date(2024, 1, 15), "Buy EUR")
+            .with_posting(
+                Posting::new("Assets:EUR", Amount::new(dec!(85.00), "EUR"))
+                    .with_price(PriceAnnotation::Unit(Amount::new(dec!(1.18), "USD"))),
+            )
+            .with_posting(Posting::new(
+                "Assets:USD",
+                Amount::new(dec!(-100.30), "USD"),
+            ));
+
+        let residual = calculate_residual(&txn);
+        // Price posting: |85| * 1.18 * signum(85) = 100.30 USD
+        // USD posting: -100.30 USD
+        assert_eq!(residual.get("USD"), Some(&dec!(0)));
+    }
+
+    /// Test UnitIncomplete price annotation with complete amount.
+    #[test]
+    fn test_calculate_residual_unit_incomplete_with_amount() {
+        let txn = Transaction::new(date(2024, 1, 15), "Exchange")
+            .with_posting(
+                Posting::new("Assets:USD", Amount::new(dec!(-100.00), "USD")).with_price(
+                    PriceAnnotation::UnitIncomplete(IncompleteAmount::Complete(Amount::new(
+                        dec!(0.85),
+                        "EUR",
+                    ))),
+                ),
+            )
+            .with_posting(Posting::new("Assets:EUR", Amount::new(dec!(85.00), "EUR")));
+
+        let residual = calculate_residual(&txn);
+        assert_eq!(residual.get("EUR"), Some(&dec!(0)));
+    }
+
+    /// Test TotalIncomplete price annotation with complete amount.
+    #[test]
+    fn test_calculate_residual_total_incomplete_with_amount() {
+        let txn = Transaction::new(date(2024, 1, 15), "Exchange")
+            .with_posting(
+                Posting::new("Assets:USD", Amount::new(dec!(-100.00), "USD")).with_price(
+                    PriceAnnotation::TotalIncomplete(IncompleteAmount::Complete(Amount::new(
+                        dec!(85.00),
+                        "EUR",
+                    ))),
+                ),
+            )
+            .with_posting(Posting::new("Assets:EUR", Amount::new(dec!(85.00), "EUR")));
+
+        let residual = calculate_residual(&txn);
+        assert_eq!(residual.get("EUR"), Some(&dec!(0)));
+    }
+
+    /// Test UnitIncomplete without amount falls back to units.
+    #[test]
+    fn test_calculate_residual_unit_incomplete_no_amount_fallback() {
+        let txn = Transaction::new(date(2024, 1, 15), "Test")
+            .with_posting(
+                Posting::new("Assets:USD", Amount::new(dec!(100.00), "USD")).with_price(
+                    PriceAnnotation::UnitIncomplete(IncompleteAmount::NumberOnly(dec!(0.85))),
+                ),
+            )
+            .with_posting(Posting::new(
+                "Assets:USD",
+                Amount::new(dec!(-100.00), "USD"),
+            ));
+
+        let residual = calculate_residual(&txn);
+        // Falls back to units since no currency in incomplete amount
+        assert_eq!(residual.get("USD"), Some(&dec!(0)));
+    }
+
+    /// Test TotalIncomplete without amount falls back to units.
+    #[test]
+    fn test_calculate_residual_total_incomplete_no_amount_fallback() {
+        let txn = Transaction::new(date(2024, 1, 15), "Test")
+            .with_posting(
+                Posting::new("Assets:USD", Amount::new(dec!(100.00), "USD")).with_price(
+                    PriceAnnotation::TotalIncomplete(IncompleteAmount::NumberOnly(dec!(85.00))),
+                ),
+            )
+            .with_posting(Posting::new(
+                "Assets:USD",
+                Amount::new(dec!(-100.00), "USD"),
+            ));
+
+        let residual = calculate_residual(&txn);
+        assert_eq!(residual.get("USD"), Some(&dec!(0)));
+    }
+
+    /// Test UnitEmpty price annotation falls back to units.
+    #[test]
+    fn test_calculate_residual_unit_empty_fallback() {
+        let txn = Transaction::new(date(2024, 1, 15), "Test")
+            .with_posting(
+                Posting::new("Assets:USD", Amount::new(dec!(100.00), "USD"))
+                    .with_price(PriceAnnotation::UnitEmpty),
+            )
+            .with_posting(Posting::new(
+                "Assets:USD",
+                Amount::new(dec!(-100.00), "USD"),
+            ));
+
+        let residual = calculate_residual(&txn);
+        // Falls back to units
+        assert_eq!(residual.get("USD"), Some(&dec!(0)));
+    }
+
+    /// Test TotalEmpty price annotation falls back to units.
+    #[test]
+    fn test_calculate_residual_total_empty_fallback() {
+        let txn = Transaction::new(date(2024, 1, 15), "Test")
+            .with_posting(
+                Posting::new("Assets:USD", Amount::new(dec!(100.00), "USD"))
+                    .with_price(PriceAnnotation::TotalEmpty),
+            )
+            .with_posting(Posting::new(
+                "Assets:USD",
+                Amount::new(dec!(-100.00), "USD"),
+            ));
+
+        let residual = calculate_residual(&txn);
+        assert_eq!(residual.get("USD"), Some(&dec!(0)));
+    }
+
+    // =========================================================================
+    // Mixed and edge case tests
+    // =========================================================================
+
+    /// Test transaction with both cost and regular postings.
+    #[test]
+    fn test_calculate_residual_mixed_cost_and_simple() {
+        let txn = Transaction::new(date(2024, 1, 15), "Buy with fee")
+            .with_posting(
+                Posting::new("Assets:Stock", Amount::new(dec!(10), "AAPL")).with_cost(
+                    CostSpec::empty()
+                        .with_number_per(dec!(150.00))
+                        .with_currency("USD"),
+                ),
+            )
+            .with_posting(Posting::new(
+                "Expenses:Fees",
+                Amount::new(dec!(10.00), "USD"),
+            ))
+            .with_posting(Posting::new(
+                "Assets:Cash",
+                Amount::new(dec!(-1510.00), "USD"),
+            ));
+
+        let residual = calculate_residual(&txn);
+        // 10 * 150 + 10 - 1510 = 0
+        assert_eq!(residual.get("USD"), Some(&dec!(0)));
+    }
+
+    /// Test sell with cost basis and capital gains.
+    #[test]
+    fn test_calculate_residual_sell_with_gains() {
+        let txn = Transaction::new(date(2024, 6, 15), "Sell stock")
+            .with_posting(
+                Posting::new("Assets:Stock", Amount::new(dec!(-10), "AAPL"))
+                    .with_cost(
+                        CostSpec::empty()
+                            .with_number_per(dec!(150.00))
+                            .with_currency("USD"),
+                    )
+                    .with_price(PriceAnnotation::Unit(Amount::new(dec!(175.00), "USD"))),
+            )
+            .with_posting(Posting::new(
+                "Assets:Cash",
+                Amount::new(dec!(1750.00), "USD"),
+            ))
+            .with_posting(Posting::new(
+                "Income:CapitalGains",
+                Amount::new(dec!(-250.00), "USD"),
+            ));
+
+        let residual = calculate_residual(&txn);
+        // Stock posting with cost: -10 * 150 = -1500 USD (cost takes precedence)
+        // Cash: +1750 USD
+        // Gains: -250 USD
+        // Total: -1500 + 1750 - 250 = 0
+        assert_eq!(residual.get("USD"), Some(&dec!(0)));
+    }
+
+    /// Test multi-currency transaction with costs.
+    #[test]
+    fn test_calculate_residual_multi_currency_with_cost() {
+        let txn = Transaction::new(date(2024, 1, 15), "Multi-currency")
+            .with_posting(
+                Posting::new("Assets:Stock:US", Amount::new(dec!(10), "AAPL")).with_cost(
+                    CostSpec::empty()
+                        .with_number_per(dec!(150.00))
+                        .with_currency("USD"),
+                ),
+            )
+            .with_posting(
+                Posting::new("Assets:Stock:EU", Amount::new(dec!(5), "SAP")).with_cost(
+                    CostSpec::empty()
+                        .with_number_per(dec!(100.00))
+                        .with_currency("EUR"),
+                ),
+            )
+            .with_posting(Posting::new(
+                "Assets:Cash:USD",
+                Amount::new(dec!(-1500.00), "USD"),
+            ))
+            .with_posting(Posting::new(
+                "Assets:Cash:EUR",
+                Amount::new(dec!(-500.00), "EUR"),
+            ));
+
+        let residual = calculate_residual(&txn);
+        assert_eq!(residual.get("USD"), Some(&dec!(0)));
+        assert_eq!(residual.get("EUR"), Some(&dec!(0)));
+    }
+
+    /// Test that incomplete units (auto postings) are skipped.
+    #[test]
+    fn test_calculate_residual_skips_incomplete_units() {
+        let txn = Transaction::new(date(2024, 1, 15), "Test")
+            .with_posting(Posting::new(
+                "Expenses:Food",
+                Amount::new(dec!(50.00), "USD"),
+            ))
+            .with_posting(Posting::auto("Assets:Cash")); // No units
+
+        let residual = calculate_residual(&txn);
+        // Only the complete posting is counted
+        assert_eq!(residual.get("USD"), Some(&dec!(50.00)));
     }
 }
