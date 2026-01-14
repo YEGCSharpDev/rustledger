@@ -35,14 +35,14 @@ sudo dnf install rustledger
 
 **Install:**
 ```bash
-sudo add-apt-repository ppa:rustledger/rustledger
+sudo add-apt-repository ppa:robcohen/rustledger
 sudo apt update
 sudo apt install rustledger
 ```
 
 **Package location:** `debian/`
 
-**PPA:** https://launchpad.net/~rustledger/+archive/ubuntu/rustledger
+**PPA:** https://launchpad.net/~robcohen/+archive/ubuntu/rustledger
 
 ### Setup (maintainer)
 
