@@ -465,3 +465,122 @@ jobs:
           git add PKGBUILD .SRCINFO
           git commit -m "Update to ${{ steps.checksums.outputs.version }}" || exit 0
           git push
+
+  # Update nixpkgs (stable releases only)
+  update-nixpkgs:
+    name: Update nixpkgs
+    needs: release
+    runs-on: ubuntu-latest
+    # Only run for stable releases (no hyphen in version)
+    if: ${{ !contains(github.ref_name, '-') }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Nix
+        uses: cachix/install-nix-action@v30
+      - name: Get hashes
+        id: hashes
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          # Get source hash
+          SRC_HASH=$(nix-prefetch-github rustledger rustledger --rev "v${VERSION}" --json | jq -r .hash)
+          echo "src_hash=$SRC_HASH" >> $GITHUB_OUTPUT
+
+          # Get cargo hash by building with fake hash and extracting from error
+          cat > /tmp/package.nix << 'PKGEOF'
+          { lib, rustPlatform, fetchFromGitHub }:
+          rustPlatform.buildRustPackage rec {
+            pname = "rustledger";
+            version = "VERSION_PLACEHOLDER";
+            src = fetchFromGitHub {
+              owner = "rustledger";
+              repo = "rustledger";
+              rev = "v${version}";
+              hash = "SRC_HASH_PLACEHOLDER";
+            };
+            cargoHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+            meta.license = lib.licenses.gpl3Only;
+          }
+          PKGEOF
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/" /tmp/package.nix
+          sed -i "s|SRC_HASH_PLACEHOLDER|${SRC_HASH}|" /tmp/package.nix
+
+          CARGO_HASH=$(nix-build -E 'with import <nixpkgs> {}; callPackage /tmp/package.nix {}' 2>&1 | grep "got:" | awk '{print $2}') || true
+          echo "cargo_hash=$CARGO_HASH" >> $GITHUB_OUTPUT
+      - name: Create nixpkgs PR
+        env:
+          GH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
+        run: |
+          VERSION=${{ steps.hashes.outputs.version }}
+          SRC_HASH=${{ steps.hashes.outputs.src_hash }}
+          CARGO_HASH=${{ steps.hashes.outputs.cargo_hash }}
+
+          # Fork and clone nixpkgs
+          gh repo fork NixOS/nixpkgs --clone --remote
+          cd nixpkgs
+
+          # Create branch
+          git checkout -b "rustledger-${VERSION}"
+
+          # Create package directory
+          mkdir -p pkgs/by-name/ru/rustledger
+
+          # Write package.nix
+          cat > pkgs/by-name/ru/rustledger/package.nix << PKGEOF
+          {
+            lib,
+            rustPlatform,
+            fetchFromGitHub,
+          }:
+
+          rustPlatform.buildRustPackage rec {
+            pname = "rustledger";
+            version = "${VERSION}";
+
+            src = fetchFromGitHub {
+              owner = "rustledger";
+              repo = "rustledger";
+              rev = "v\${version}";
+              hash = "${SRC_HASH}";
+            };
+
+            cargoHash = "${CARGO_HASH}";
+
+            meta = with lib; {
+              description = "Fast, pure Rust implementation of Beancount double-entry accounting";
+              homepage = "https://github.com/rustledger/rustledger";
+              changelog = "https://github.com/rustledger/rustledger/releases/tag/v\${version}";
+              license = licenses.gpl3Only;
+              maintainers = with maintainers; [ ];
+              mainProgram = "rledger-check";
+            };
+          }
+          PKGEOF
+
+          # Commit and push
+          git config user.name "rustledger-ci"
+          git config user.email "rustledger-ci@users.noreply.github.com"
+          git add pkgs/by-name/ru/rustledger/package.nix
+          git commit -m "rustledger: init at ${VERSION}"
+          git push -u origin "rustledger-${VERSION}"
+
+          # Create PR
+          gh pr create \
+            --repo NixOS/nixpkgs \
+            --title "rustledger: init at ${VERSION}" \
+            --body "## Description
+
+          Add [rustledger](https://github.com/rustledger/rustledger), a fast pure Rust implementation of Beancount double-entry accounting.
+
+          - 10x faster than Python beancount
+          - Full Beancount syntax compatibility
+          - Single binary, no Python dependencies
+
+          ## Things done
+
+          - Built on x86_64-linux
+          - Tested basic functionality
+
+          ---
+          *Automated PR from rustledger release workflow*"
