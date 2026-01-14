@@ -274,8 +274,18 @@ jobs:
         run: npm install -g npm@latest
       - name: Wait for npm registry propagation
         run: |
-          echo "Waiting 60s for @rustledger/wasm to propagate..."
-          sleep 60
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "Waiting for @rustledger/wasm@$VERSION to be available on npm..."
+          for i in {1..12}; do
+            if npm view @rustledger/wasm@$VERSION version 2>/dev/null; then
+              echo "Package available!"
+              exit 0
+            fi
+            echo "Attempt $i: Package not yet available, waiting 30s..."
+            sleep 30
+          done
+          echo "Package not available after 6 minutes"
+          exit 1
       - name: Update version and install dependencies
         run: |
           cd packages/mcp-server
