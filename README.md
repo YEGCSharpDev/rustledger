@@ -57,6 +57,13 @@ curl -sSfL rustledger.github.io/i | sh
 brew install rustledger/rustledger/rustledger
 ```
 
+### Scoop (Windows)
+
+```powershell
+scoop bucket add rustledger https://github.com/rustledger/scoop-rustledger
+scoop install rustledger
+```
+
 ### Cargo
 
 ```bash

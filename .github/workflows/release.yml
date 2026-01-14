@@ -145,6 +145,20 @@ jobs:
           repository: rustledger/homebrew-rustledger
           event-type: release
           client-payload: '{"version": "${{ github.ref_name }}"}'
+
+  # Update Scoop bucket
+  update-scoop:
+    name: Update Scoop bucket
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Scoop bucket update
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
+          repository: rustledger/scoop-rustledger
+          event-type: release
+          client-payload: '{"version": "${{ github.ref_name }}"}'
   # Publish to crates.io
   publish:
     name: Publish to crates.io
