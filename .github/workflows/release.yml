@@ -694,18 +694,18 @@ jobs:
       - name: Configure COPR
         run: |
           mkdir -p ~/.config
-          cat > ~/.config/copr << EOF
+          cat > ~/.config/copr << 'EOF'
           [copr-cli]
-          login = rustledger
-          username = rustledger
-          token = ${{ secrets.COPR_API_TOKEN }}
+          login = ${{ secrets.COPR_LOGIN }}
+          username = robcohen
+          token = ${{ secrets.COPR_TOKEN }}
           copr_url = https://copr.fedorainfracloud.org
           EOF
       - name: Trigger SCM build
         run: |
           # Trigger a build using COPR's SCM integration
           # The project is configured to fetch from GitHub and use packaging/rpm/rustledger.spec
-          copr-cli build-package rustledger/rustledger \
+          copr-cli build-package robcohen/rustledger \
             --name rustledger \
             --nowait || true
 
