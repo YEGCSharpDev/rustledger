@@ -38,12 +38,20 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g., v0.1.0)'
+        required: true
+        type: string
 permissions:
   contents: write
   id-token: write # Required for npm trusted publishing (OIDC)
   packages: write # Required for GitHub Container Registry
 env:
   CARGO_TERM_COLOR: always
+  # Use input tag for workflow_dispatch, otherwise use the pushed tag
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 jobs:
   build:
     name: Build ${{ matrix.target }}
@@ -77,6 +85,8 @@ jobs:
             os: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -104,8 +114,8 @@ jobs:
         run: |
           cd target/${{ matrix.target }}/release
 
-          # Get version from tag
-          VERSION=${GITHUB_REF#refs/tags/}
+          # Get version from tag (RELEASE_TAG is set at workflow level)
+          VERSION=$RELEASE_TAG
 
           # Create archive with all binaries
           ARCHIVE="rustledger-${VERSION}-${{ matrix.target }}.tar.gz"
@@ -122,8 +132,8 @@ jobs:
         run: |
           cd target/${{ matrix.target }}/release
 
-          # Get version from tag
-          $VERSION = $env:GITHUB_REF -replace 'refs/tags/', ''
+          # Get version from tag (RELEASE_TAG is set at workflow level)
+          $VERSION = $env:RELEASE_TAG
 
           # Create archive with all binaries
           $ARCHIVE = "rustledger-${VERSION}-${{ matrix.target }}.zip"
@@ -150,6 +160,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -178,7 +190,7 @@ jobs:
           token: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
           repository: rustledger/homebrew-rustledger
           event-type: release
-          client-payload: '{"version": "${{ github.ref_name }}"}'
+          client-payload: '{"version": "${{ env.RELEASE_TAG }}"}'
 
   # Update Scoop bucket
   update-scoop:
@@ -192,7 +204,7 @@ jobs:
           token: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
           repository: rustledger/scoop-rustledger
           event-type: release
-          client-payload: '{"version": "${{ github.ref_name }}"}'
+          client-payload: '{"version": "${{ env.RELEASE_TAG }}"}'
   # Publish to crates.io
   publish:
     name: Publish to crates.io
@@ -200,6 +212,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Publish crates (in dependency order)
@@ -252,6 +266,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -264,7 +280,7 @@ jobs:
           wasm-pack build --target web --release
       - name: Prepare package
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          VERSION=${RELEASE_TAG#v}
           cd crates/rustledger-wasm/pkg
           sed -i "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" package.json
           sed -i 's/"name": "rustledger-wasm"/"name": "@rustledger\/wasm"/' package.json
@@ -287,7 +303,7 @@ jobs:
           path: pkg
       - name: Package WASM
         run: |
-          VERSION=${GITHUB_REF#refs/tags/}
+          VERSION=$RELEASE_TAG
           cd pkg
           tar -czvf "../rustledger-wasm-${VERSION}.tar.gz" .
           cd ..
@@ -343,6 +359,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - name: Download musl artifacts
         uses: actions/download-artifact@v4
         with:
@@ -351,7 +369,7 @@ jobs:
           merge-multiple: true
       - name: Extract binaries
         run: |
-          VERSION=${GITHUB_REF#refs/tags/}
+          VERSION=$RELEASE_TAG
           mkdir -p docker-context/amd64 docker-context/arm64
           tar -xzf "artifacts/rustledger-${VERSION}-x86_64-unknown-linux-musl.tar.gz" -C docker-context/amd64
           tar -xzf "artifacts/rustledger-${VERSION}-aarch64-unknown-linux-musl.tar.gz" -C docker-context/arm64
@@ -398,6 +416,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -407,7 +427,7 @@ jobs:
         run: npm install -g npm@latest
       - name: Wait for npm registry propagation
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          VERSION=${RELEASE_TAG#v}
           echo "Waiting for @rustledger/wasm@$VERSION to be available on npm..."
           for i in {1..12}; do
             if npm view @rustledger/wasm@$VERSION version 2>/dev/null; then
@@ -422,7 +442,7 @@ jobs:
       - name: Update version and install dependencies
         run: |
           cd packages/mcp-server
-          VERSION=${GITHUB_REF#refs/tags/v}
+          VERSION=${RELEASE_TAG#v}
           # Update version in package.json
           sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" package.json
           # Update @rustledger/wasm dependency to use npm package
@@ -445,6 +465,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
@@ -457,7 +479,7 @@ jobs:
       - name: Get checksums
         id: checksums
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          VERSION=${RELEASE_TAG#v}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "pkgver=${VERSION//-/_}" >> $GITHUB_OUTPUT
 
@@ -520,12 +542,14 @@ jobs:
     # Run for all releases (0.x.y has no hyphens, so this always runs)
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - name: Install Nix
         uses: cachix/install-nix-action@v30
       - name: Get hashes
         id: hashes
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          VERSION=${RELEASE_TAG#v}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
           # Get source hash
@@ -692,6 +716,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -725,7 +751,7 @@ jobs:
           EOF
       - name: Build and upload source package
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          VERSION=${RELEASE_TAG#v}
           # Convert version: 1.0.0-rc.18 -> 1.0.0~rc.18 for Debian
           DEB_VERSION=$(echo "$VERSION" | sed 's/-/~/g')
 
