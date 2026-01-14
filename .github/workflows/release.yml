@@ -140,12 +140,10 @@ jobs:
       - name: Trigger Homebrew tap update
         uses: peter-evans/repository-dispatch@v3
         with:
-          token: ${{ secrets.HOMEBREW_DISPATCH_TOKEN }}
+          token: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
           repository: rustledger/homebrew-rustledger
           event-type: release
           client-payload: '{"version": "${{ github.ref_name }}"}'
-        env:
-          # ref_name is like "v1.0.0-rc.18", workflow strips the "v" prefix
   # Publish to crates.io
   publish:
     name: Publish to crates.io
