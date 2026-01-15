@@ -37,8 +37,10 @@ jobs:
         run: |
           pip install beancount matplotlib
 
-      - name: Build rustledger
-        run: cargo build --release -p rustledger
+      - name: Build rustledger (without WASM for faster build)
+        run: |
+          # Build without wasm-runtime feature - not needed for benchmarking
+          cargo build --release -p rustledger --no-default-features
 
       - name: Generate test ledger
         run: |

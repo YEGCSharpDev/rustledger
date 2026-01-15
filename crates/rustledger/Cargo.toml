@@ -16,10 +16,12 @@ readme = "../../README.md"
 bench = false
 
 [features]
-default = ["bean-compat"]
+default = ["bean-compat", "wasm"]
 # Include bean-* binaries for backwards compatibility with Python beancount.
 # Disable with: cargo install rustledger --no-default-features
 bean-compat = []
+# Enable WASM plugin runtime (adds ~30s to build time)
+wasm = ["rustledger-plugin/wasm-runtime"]
 
 # Primary binaries (always installed)
 [[bin]]
@@ -93,7 +95,7 @@ rustledger-loader.workspace = true
 rustledger-booking.workspace = true
 rustledger-validate.workspace = true
 rustledger-query.workspace = true
-rustledger-plugin = { workspace = true, features = ["wasm-runtime"] }
+rustledger-plugin.workspace = true
 rustledger-importer.workspace = true
 clap.workspace = true
 clap_complete.workspace = true

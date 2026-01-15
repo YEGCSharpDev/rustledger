@@ -7,9 +7,9 @@ use clap::Parser;
 use rustledger_booking::interpolate;
 use rustledger_core::Directive;
 use rustledger_loader::{LoadError, Loader};
-use rustledger_plugin::{
-    wrappers_to_directives, NativePluginRegistry, PluginInput, PluginManager, PluginOptions,
-};
+#[cfg(feature = "wasm")]
+use rustledger_plugin::PluginManager;
+use rustledger_plugin::{wrappers_to_directives, NativePluginRegistry, PluginInput, PluginOptions};
 use rustledger_validate::validate;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -50,6 +50,7 @@ pub struct Args {
     pub auto: bool,
 
     /// Load a WASM plugin (can be specified multiple times)
+    #[cfg(feature = "wasm")]
     #[arg(long = "plugin", value_name = "WASM_FILE")]
     pub plugins: Vec<PathBuf>,
 
@@ -178,7 +179,12 @@ fn run(args: &Args) -> Result<ExitCode> {
     }
 
     // Run plugins if specified
-    if !native_plugins_to_run.is_empty() || !args.plugins.is_empty() {
+    #[cfg(feature = "wasm")]
+    let has_wasm_plugins = !args.plugins.is_empty();
+    #[cfg(not(feature = "wasm"))]
+    let has_wasm_plugins = false;
+
+    if !native_plugins_to_run.is_empty() || has_wasm_plugins {
         if args.verbose && !args.quiet {
             eprintln!("Running plugins...");
         }
@@ -220,6 +226,7 @@ fn run(args: &Args) -> Result<ExitCode> {
             }
         }
 
+        #[cfg(feature = "wasm")]
         if !args.plugins.is_empty() {
             let mut wasm_manager = PluginManager::new();
 
