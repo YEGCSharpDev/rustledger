@@ -37,33 +37,46 @@ rledger-query ledger.beancount "SELECT account, SUM(position) GROUP BY account"
 ```
 
 <details>
-<summary><strong>More installation options</strong></summary>
+<summary><strong>All installation options</strong></summary>
 
-### Homebrew (macOS/Linux)
+### macOS
 ```bash
 brew install rustledger/rustledger/rustledger
 ```
 
-### Cargo
+### Ubuntu/Debian
 ```bash
-cargo binstall rustledger  # Pre-built binary
-cargo install rustledger   # Build from source
+sudo add-apt-repository ppa:robcohen/rustledger
+sudo apt update && sudo apt install rustledger
 ```
 
-### Scoop (Windows)
+### Fedora/RHEL
+```bash
+sudo dnf copr enable rustledger/rustledger
+sudo dnf install rustledger
+```
+
+### Arch Linux
+```bash
+yay -S rustledger-bin   # Pre-built binary
+yay -S rustledger       # Build from source
+```
+
+### Windows
 ```powershell
 scoop bucket add rustledger https://github.com/rustledger/scoop-rustledger
 scoop install rustledger
 ```
 
+### Cargo
+```bash
+cargo binstall rustledger  # Pre-built binary (fast)
+cargo install rustledger   # Build from source
+```
+
 ### Nix
 ```bash
 nix run github:rustledger/rustledger -- rledger-check ledger.beancount
-```
-
-### Arch Linux (AUR)
-```bash
-yay -S rustledger-bin
 ```
 
 ### Docker
@@ -72,7 +85,7 @@ docker run --rm -v "$PWD:/data" ghcr.io/rustledger/rustledger /data/ledger.beanc
 ```
 
 ### Pre-built Binaries
-Download from [GitHub Releases](https://github.com/rustledger/rustledger/releases) for Linux, macOS, and Windows.
+Download from [GitHub Releases](https://github.com/rustledger/rustledger/releases) for Linux (glibc/musl), macOS, and Windows (x64/arm64).
 
 </details>
 
