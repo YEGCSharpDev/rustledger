@@ -23,8 +23,8 @@ use std::str::FromStr;
 use chrono::NaiveDate;
 use rustledger_core::{
     Amount, Balance, Close, Commodity, CostSpec, Custom, Directive, Document, Event,
-    IncompleteAmount, MetaValue, Metadata, Note, Open, Pad, Posting, Price, PriceAnnotation, Query,
-    Transaction,
+    IncompleteAmount, InternedStr, MetaValue, Metadata, Note, Open, Pad, Posting, Price,
+    PriceAnnotation, Query, Transaction,
 };
 
 use crate::error::{ParseError, ParseErrorKind};
@@ -51,7 +51,7 @@ pub fn parse(source: &str) -> ParseResult {
     let mut plugins = Vec::new();
 
     // Tag stack for pushtag/poptag
-    let mut tag_stack: Vec<String> = Vec::new();
+    let mut tag_stack: Vec<InternedStr> = Vec::new();
     // Meta stack for pushmeta/popmeta
     let mut meta_stack: Vec<(String, MetaValue)> = Vec::new();
 
@@ -68,10 +68,10 @@ pub fn parse(source: &str) -> ParseResult {
             ParsedItem::Option(k, v) => options.push((k, v, span)),
             ParsedItem::Include(p) => includes.push((p, span)),
             ParsedItem::Plugin(p, c) => plugins.push((p, c, span)),
-            ParsedItem::Pushtag(tag) => tag_stack.push(tag),
+            ParsedItem::Pushtag(tag) => tag_stack.push(tag.into()),
             ParsedItem::Poptag(tag) => {
                 // Remove the tag from the stack (should match)
-                if let Some(pos) = tag_stack.iter().rposition(|t| t == &tag) {
+                if let Some(pos) = tag_stack.iter().rposition(|t| t.as_str() == tag) {
                     tag_stack.remove(pos);
                 }
             }
@@ -109,7 +109,7 @@ pub fn parse(source: &str) -> ParseResult {
 }
 
 /// Apply pushed tags to a directive (only affects transactions).
-fn apply_pushed_tags(directive: Directive, tag_stack: &[String]) -> Directive {
+fn apply_pushed_tags(directive: Directive, tag_stack: &[InternedStr]) -> Directive {
     if tag_stack.is_empty() {
         return directive;
     }
@@ -1024,7 +1024,8 @@ enum TxnHeaderItem<'a> {
 
 /// Parse a transaction body.
 fn transaction_body<'a>(
-) -> impl Parser<'a, ParserInput<'a>, Box<dyn Fn(NaiveDate) -> Directive + 'a>, ParserExtra<'a>> {
+) -> impl Parser<'a, ParserInput<'a>, Box<dyn FnOnce(NaiveDate) -> Directive + 'a>, ParserExtra<'a>>
+{
     // Header items: strings, tags, and links can be interleaved in any order
     let header_item = choice((
         string_literal().map(TxnHeaderItem::String),
@@ -1045,7 +1046,7 @@ fn transaction_body<'a>(
                 let mut tags = Vec::new();
                 let mut links = Vec::new();
 
-                for item in header_items.clone() {
+                for item in header_items {
                     match item {
                         TxnHeaderItem::String(s) => strings.push(s),
                         TxnHeaderItem::Tag(t) => tags.push(t),
@@ -1070,7 +1071,7 @@ fn transaction_body<'a>(
                 for l in links {
                     txn = txn.with_link(l);
                 }
-                for item in items.clone().into_iter().flatten() {
+                for item in items.into_iter().flatten() {
                     match item {
                         PostingOrMeta::Posting(p) => {
                             txn = txn.with_posting(p);
@@ -1089,7 +1090,7 @@ fn transaction_body<'a>(
                     }
                 }
                 Directive::Transaction(txn)
-            }) as Box<dyn Fn(NaiveDate) -> Directive + 'a>
+            }) as Box<dyn FnOnce(NaiveDate) -> Directive + 'a>
         })
 }
 
@@ -1227,7 +1228,8 @@ fn posting<'a>() -> impl Parser<'a, ParserInput<'a>, Posting, ParserExtra<'a>> {
 
 /// Parse a balance directive body.
 fn balance_body<'a>(
-) -> impl Parser<'a, ParserInput<'a>, Box<dyn Fn(NaiveDate) -> Directive + 'a>, ParserExtra<'a>> {
+) -> impl Parser<'a, ParserInput<'a>, Box<dyn FnOnce(NaiveDate) -> Directive + 'a>, ParserExtra<'a>>
+{
     // Amount with optional tolerance: NUMBER [~ TOLERANCE] CURRENCY [{COST}]
     // e.g., "200 USD", "200 ~ 0.002 USD", or "10 MSFT {45.30 USD}"
     let tolerance = ws()
@@ -1263,13 +1265,14 @@ fn balance_body<'a>(
                     tolerance: tol,
                     meta: meta.clone(),
                 })
-            }) as Box<dyn Fn(NaiveDate) -> Directive + 'a>
+            }) as Box<dyn FnOnce(NaiveDate) -> Directive + 'a>
         })
 }
 
 /// Parse an open directive body.
 fn open_body<'a>(
-) -> impl Parser<'a, ParserInput<'a>, Box<dyn Fn(NaiveDate) -> Directive + 'a>, ParserExtra<'a>> {
+) -> impl Parser<'a, ParserInput<'a>, Box<dyn FnOnce(NaiveDate) -> Directive + 'a>, ParserExtra<'a>>
+{
     just("open")
         .ignore_then(ws1())
         .ignore_then(account())
@@ -1297,13 +1300,14 @@ fn open_body<'a>(
                     booking: booking.clone(),
                     meta: meta.clone(),
                 })
-            }) as Box<dyn Fn(NaiveDate) -> Directive + 'a>
+            }) as Box<dyn FnOnce(NaiveDate) -> Directive + 'a>
         })
 }
 
 /// Parse a close directive body.
 fn close_body<'a>(
-) -> impl Parser<'a, ParserInput<'a>, Box<dyn Fn(NaiveDate) -> Directive + 'a>, ParserExtra<'a>> {
+) -> impl Parser<'a, ParserInput<'a>, Box<dyn FnOnce(NaiveDate) -> Directive + 'a>, ParserExtra<'a>>
+{
     just("close")
         .ignore_then(ws1())
         .ignore_then(account())
@@ -1321,13 +1325,14 @@ fn close_body<'a>(
                     account: acct.into(),
                     meta: meta.clone(),
                 })
-            }) as Box<dyn Fn(NaiveDate) -> Directive + 'a>
+            }) as Box<dyn FnOnce(NaiveDate) -> Directive + 'a>
         })
 }
 
 /// Parse a commodity directive body.
 fn commodity_body<'a>(
-) -> impl Parser<'a, ParserInput<'a>, Box<dyn Fn(NaiveDate) -> Directive + 'a>, ParserExtra<'a>> {
+) -> impl Parser<'a, ParserInput<'a>, Box<dyn FnOnce(NaiveDate) -> Directive + 'a>, ParserExtra<'a>>
+{
     just("commodity")
         .ignore_then(ws1())
         .ignore_then(currency())
@@ -1345,13 +1350,14 @@ fn commodity_body<'a>(
                     currency: curr.into(),
                     meta,
                 })
-            }) as Box<dyn Fn(NaiveDate) -> Directive + 'a>
+            }) as Box<dyn FnOnce(NaiveDate) -> Directive + 'a>
         })
 }
 
 /// Parse a pad directive body.
 fn pad_body<'a>(
-) -> impl Parser<'a, ParserInput<'a>, Box<dyn Fn(NaiveDate) -> Directive + 'a>, ParserExtra<'a>> {
+) -> impl Parser<'a, ParserInput<'a>, Box<dyn FnOnce(NaiveDate) -> Directive + 'a>, ParserExtra<'a>>
+{
     just("pad")
         .ignore_then(ws1())
         .ignore_then(account())
@@ -1372,13 +1378,14 @@ fn pad_body<'a>(
                     source_account: source.into(),
                     meta: meta.clone(),
                 })
-            }) as Box<dyn Fn(NaiveDate) -> Directive + 'a>
+            }) as Box<dyn FnOnce(NaiveDate) -> Directive + 'a>
         })
 }
 
 /// Parse an event directive body.
 fn event_body<'a>(
-) -> impl Parser<'a, ParserInput<'a>, Box<dyn Fn(NaiveDate) -> Directive + 'a>, ParserExtra<'a>> {
+) -> impl Parser<'a, ParserInput<'a>, Box<dyn FnOnce(NaiveDate) -> Directive + 'a>, ParserExtra<'a>>
+{
     just("event")
         .ignore_then(ws1())
         .ignore_then(string_literal())
@@ -1399,13 +1406,14 @@ fn event_body<'a>(
                     value: value.clone(),
                     meta: meta.clone(),
                 })
-            }) as Box<dyn Fn(NaiveDate) -> Directive + 'a>
+            }) as Box<dyn FnOnce(NaiveDate) -> Directive + 'a>
         })
 }
 
 /// Parse a query directive body.
 fn query_body<'a>(
-) -> impl Parser<'a, ParserInput<'a>, Box<dyn Fn(NaiveDate) -> Directive + 'a>, ParserExtra<'a>> {
+) -> impl Parser<'a, ParserInput<'a>, Box<dyn FnOnce(NaiveDate) -> Directive + 'a>, ParserExtra<'a>>
+{
     just("query")
         .ignore_then(ws1())
         .ignore_then(string_literal())
@@ -1421,13 +1429,14 @@ fn query_body<'a>(
                     query: query_string.clone(),
                     meta: Metadata::default(),
                 })
-            }) as Box<dyn Fn(NaiveDate) -> Directive + 'a>
+            }) as Box<dyn FnOnce(NaiveDate) -> Directive + 'a>
         })
 }
 
 /// Parse a note directive body.
 fn note_body<'a>(
-) -> impl Parser<'a, ParserInput<'a>, Box<dyn Fn(NaiveDate) -> Directive + 'a>, ParserExtra<'a>> {
+) -> impl Parser<'a, ParserInput<'a>, Box<dyn FnOnce(NaiveDate) -> Directive + 'a>, ParserExtra<'a>>
+{
     just("note")
         .ignore_then(ws1())
         .ignore_then(account())
@@ -1448,13 +1457,14 @@ fn note_body<'a>(
                     comment: comment.clone(),
                     meta: meta.clone(),
                 })
-            }) as Box<dyn Fn(NaiveDate) -> Directive + 'a>
+            }) as Box<dyn FnOnce(NaiveDate) -> Directive + 'a>
         })
 }
 
 /// Parse a document directive body.
 fn document_body<'a>(
-) -> impl Parser<'a, ParserInput<'a>, Box<dyn Fn(NaiveDate) -> Directive + 'a>, ParserExtra<'a>> {
+) -> impl Parser<'a, ParserInput<'a>, Box<dyn FnOnce(NaiveDate) -> Directive + 'a>, ParserExtra<'a>>
+{
     // Tags and links after the path
     let tag_or_link = choice((
         tag().map(|t| (Some(t), None)),
@@ -1490,9 +1500,9 @@ fn document_body<'a>(
                 meta.insert(k.to_string(), v);
             }
 
-            // Convert &str to String for owned storage
-            let tags: Vec<String> = tags.iter().copied().map(String::from).collect();
-            let links: Vec<String> = links.iter().copied().map(String::from).collect();
+            // Convert &str to InternedStr for owned storage
+            let tags: Vec<InternedStr> = tags.iter().copied().map(InternedStr::from).collect();
+            let links: Vec<InternedStr> = links.iter().copied().map(InternedStr::from).collect();
 
             Box::new(move |date: NaiveDate| {
                 Directive::Document(Document {
@@ -1503,13 +1513,14 @@ fn document_body<'a>(
                     links: links.clone(),
                     meta: meta.clone(),
                 })
-            }) as Box<dyn Fn(NaiveDate) -> Directive + 'a>
+            }) as Box<dyn FnOnce(NaiveDate) -> Directive + 'a>
         })
 }
 
 /// Parse a price directive body.
 fn price_body<'a>(
-) -> impl Parser<'a, ParserInput<'a>, Box<dyn Fn(NaiveDate) -> Directive + 'a>, ParserExtra<'a>> {
+) -> impl Parser<'a, ParserInput<'a>, Box<dyn FnOnce(NaiveDate) -> Directive + 'a>, ParserExtra<'a>>
+{
     just("price")
         .ignore_then(ws1())
         .ignore_then(currency())
@@ -1530,13 +1541,14 @@ fn price_body<'a>(
                     amount: amt.clone(),
                     meta: meta.clone(),
                 })
-            }) as Box<dyn Fn(NaiveDate) -> Directive + 'a>
+            }) as Box<dyn FnOnce(NaiveDate) -> Directive + 'a>
         })
 }
 
 /// Parse a custom directive body.
 fn custom_body<'a>(
-) -> impl Parser<'a, ParserInput<'a>, Box<dyn Fn(NaiveDate) -> Directive + 'a>, ParserExtra<'a>> {
+) -> impl Parser<'a, ParserInput<'a>, Box<dyn FnOnce(NaiveDate) -> Directive + 'a>, ParserExtra<'a>>
+{
     // Custom values can be strings, accounts, amounts, dates, booleans, etc.
     let custom_value = metadata_value();
 
@@ -1555,7 +1567,7 @@ fn custom_body<'a>(
                     values: values.clone(),
                     meta: Metadata::default(),
                 })
-            }) as Box<dyn Fn(NaiveDate) -> Directive + 'a>
+            }) as Box<dyn FnOnce(NaiveDate) -> Directive + 'a>
         })
 }
 
@@ -1888,7 +1900,7 @@ poptag #trip
         // First two transactions should have the #trip tag
         if let Directive::Transaction(txn) = &result.directives[0].value {
             assert!(
-                txn.tags.contains(&"trip".to_string()),
+                txn.tags.iter().any(|t| t.as_str() == "trip"),
                 "first txn should have #trip tag"
             );
         } else {
@@ -1897,7 +1909,7 @@ poptag #trip
 
         if let Directive::Transaction(txn) = &result.directives[1].value {
             assert!(
-                txn.tags.contains(&"trip".to_string()),
+                txn.tags.iter().any(|t| t.as_str() == "trip"),
                 "second txn should have #trip tag"
             );
         } else {
@@ -1907,7 +1919,7 @@ poptag #trip
         // Third transaction should NOT have the #trip tag
         if let Directive::Transaction(txn) = &result.directives[2].value {
             assert!(
-                !txn.tags.contains(&"trip".to_string()),
+                !txn.tags.iter().any(|t| t.as_str() == "trip"),
                 "third txn should NOT have #trip tag"
             );
         } else {
@@ -1936,16 +1948,16 @@ poptag #project"#;
 
         // First transaction should have both tags
         if let Directive::Transaction(txn) = &result.directives[0].value {
-            assert!(txn.tags.contains(&"project".to_string()));
-            assert!(txn.tags.contains(&"urgent".to_string()));
+            assert!(txn.tags.iter().any(|t| t.as_str() == "project"));
+            assert!(txn.tags.iter().any(|t| t.as_str() == "urgent"));
         } else {
             panic!("expected transaction");
         }
 
         // Second transaction should only have #project
         if let Directive::Transaction(txn) = &result.directives[1].value {
-            assert!(txn.tags.contains(&"project".to_string()));
-            assert!(!txn.tags.contains(&"urgent".to_string()));
+            assert!(txn.tags.iter().any(|t| t.as_str() == "project"));
+            assert!(!txn.tags.iter().any(|t| t.as_str() == "urgent"));
         } else {
             panic!("expected transaction");
         }
@@ -1963,8 +1975,8 @@ poptag #project"#;
 
         if let Directive::Transaction(txn) = &result.directives[0].value {
             // Should have both the pushed tag and the explicit tag
-            assert!(txn.tags.contains(&"auto".to_string()));
-            assert!(txn.tags.contains(&"manual".to_string()));
+            assert!(txn.tags.iter().any(|t| t.as_str() == "auto"));
+            assert!(txn.tags.iter().any(|t| t.as_str() == "manual"));
         } else {
             panic!("expected transaction");
         }

@@ -28,9 +28,16 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+#[cfg(feature = "cache")]
+pub mod cache;
 mod options;
 mod source_map;
 
+#[cfg(feature = "cache")]
+pub use cache::{
+    invalidate_cache, load_cache_entry, reintern_directives, save_cache_entry, CacheEntry,
+    CachedOptions, CachedPlugin,
+};
 pub use options::Options;
 pub use source_map::{SourceFile, SourceMap};
 

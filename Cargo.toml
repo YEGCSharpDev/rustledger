@@ -81,6 +81,9 @@ flate2 = "1"
 zip = "2"
 sha2 = "0.10"
 
+# Serialization (for cache)
+rkyv = "0.8"
+
 # Async (if needed)
 tokio = { version = "1", features = ["full"] }
 

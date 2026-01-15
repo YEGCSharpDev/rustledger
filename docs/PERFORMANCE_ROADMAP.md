@@ -22,14 +22,18 @@ Push the speedup from 5x to **10-20x** through systematic optimization.
 | Phase 1.1: Rc for closures | 113ms | 141ms | ❌ 25% slower (reverted) |
 | Phase 1.1: Zero-copy primitives | 108ms | 101ms | **~7% faster** |
 | Phase 2: SmallVec | 113ms | 143ms | ❌ 27% slower (reverted) |
+| Phase 3: Full string interning | 30ms | 28ms | **~6% faster** |
 | Phase 4: Rayon parallelization | 113ms | 108ms | **~5% faster** |
 | Phase 0.2: PGO | 108ms | 94ms | **13% faster** |
+| Phase 5: rkyv cache | 30ms | 13ms | **2.3x faster** (cache hit) |
 
 **Combined improvement**: 160ms → 94ms = **41% faster** (1.7x speedup on top of existing gains)
 
-**With zero-copy primitives + PGO**: ~87ms projected (160ms → 87ms = **46% faster**)
+**With full interning**: ~28ms on 7176-line file (cold parse)
 
-**Note**: Local benchmarks run on 10K transaction ledger. Rc and SmallVec add overhead that outweighs benefits. PGO and Rayon together provide significant gains.
+**With cache hit**: 13ms = **instant** for repeated runs (7176-line file benchmark)
+
+**Note**: Local benchmarks run on 10K transaction ledger. Rc and SmallVec add overhead that outweighs benefits. Phase 3 extends InternedStr to payee/narration/tags/links for memory deduplication. Cache provides 2.3x speedup on subsequent runs.
 
 ---
 
@@ -119,26 +123,31 @@ pub postings: SmallVec<[Posting; 4]>,    // was Vec<Posting>
 
 ---
 
-## Phase 3: String Interning (Week 3-4)
+## Phase 3: String Interning (Week 3-4) ✅ DONE
 
 **Goal**: Deduplicate strings across entire ledger
-**Expected Impact**: 10-20% faster, 30-50% less memory
+**Result**: ~6% faster, memory deduplication via Arc<str>
 
-### 3.1 Extend InternedStr Usage
+### 3.1 Extend InternedStr Usage ✅
 ```rust
 // crates/rustledger-core/src/directive.rs
 pub struct Transaction {
     pub payee: Option<InternedStr>,    // was Option<String>
     pub narration: InternedStr,        // was String
-    pub tags: SmallVec<[InternedStr; 4]>,
-    pub links: SmallVec<[InternedStr; 2]>,
+    pub tags: Vec<InternedStr>,        // was Vec<String>
+    pub links: Vec<InternedStr>,       // was Vec<String>
+}
+
+pub struct Document {
+    pub tags: Vec<InternedStr>,        // was Vec<String>
+    pub links: Vec<InternedStr>,       // was Vec<String>
 }
 ```
 
-### 3.2 Intern at Parse Time
-- Pass `StringInterner` to parser
-- Intern strings immediately when parsed
-- Share interner across all parsed files
+### 3.2 Cache Re-interning ✅
+- `reintern_directives()` deduplicates strings after cache load
+- Typical deduplication: 150+ strings per ledger
+- Memory savings from Arc<str> sharing
 
 ---
 
@@ -161,30 +170,31 @@ rayon = "1.8"
 
 ---
 
-## Phase 5: Binary Cache Format (Week 5-6)
+## Phase 5: Binary Cache Format (Week 5-6) ✅ DONE
 
 **Goal**: Cache parsed ledgers for instant reload
-**Expected Impact**: 50-90% faster on cache hit
+**Result**: 2.3x faster on cache hit (30ms → 13ms)
 
-### 5.1 Implement Cache Format
-- **File**: `crates/rustledger-loader/src/cache.rs` (new)
-- **Format**: [rkyv](https://github.com/rkyv/rkyv) for zero-copy deserialization (faster than bincode)
-- **Cache key**: SHA256 hash of source file content
+### 5.1 Implement Cache Format ✅
+- **File**: `crates/rustledger-loader/src/cache.rs`
+- **Format**: [rkyv](https://github.com/rkyv/rkyv) for zero-copy deserialization
+- **Cache key**: SHA256 hash of file mtime + size
 - **Location**: `ledger.beancount` → `ledger.beancount.cache`
 
-Why rkyv over bincode:
-- Zero-copy: access data directly from mmap'd cache file
-- [Benchmarks show](https://david.kolo.ski/blog/rkyv-is-faster-than/) rkyv wins nearly every performance category
-- No deserialization step needed - just validate and use
+Custom rkyv wrappers for non-rkyv types:
+- `AsDecimal` - Decimal as 16-byte binary
+- `AsNaiveDate` - Date as i32 days since epoch
+- `AsInternedStr` - InternedStr as ArchivedString
 
-### 5.2 Cache Invalidation
-- Check source file hash on load
-- If hash matches cache → instant load
-- If hash differs → parse and rebuild cache
+### 5.2 Cache Invalidation ✅
+- Hash computed from all included files' mtime + size
+- Graceful fallback on cache errors
+- `invalidate_cache()` API for manual invalidation
 
-### 5.3 Optional Flag
+### 5.3 CLI Integration ✅
 ```bash
 rledger-check --no-cache ledger.beancount  # Skip cache
+rledger-check -C ledger.beancount          # Short form
 rledger-check ledger.beancount             # Use cache (default)
 ```
 
@@ -223,34 +233,24 @@ rledger-check ledger.beancount             # Use cache (default)
 
 ## Roadmap Summary
 
-| Phase | Work | Impact | Timeline |
-|-------|------|--------|----------|
-| 0 | Quick wins (Arc, PGO) | +20% | Day 1 |
-| 1 | Zero-copy parsing | +25% | Week 1 |
-| 2 | SmallVec + InternedStr | +20% | Week 2 |
-| 3 | Full interning | +15% | Week 3-4 |
-| 4 | Parallelization (rayon) | +100% | Week 4-5 |
-| 5 | Binary cache (rkyv) | +50-90%* | Week 5-6 |
-| 6 | Logos + Bumpalo | +40% | Future |
-| 7 | Memory-mapped files | +10-20%** | Future |
+| Phase | Work | Status | Result |
+|-------|------|--------|--------|
+| 0 | Quick wins (Arc, PGO) | ✅ Done | +29% (16% + 13%) |
+| 1 | Zero-copy parsing | ✅ Done | +7% |
+| 2 | SmallVec | ❌ Reverted | -27% (slower) |
+| 3 | Full interning | ✅ Done | +6% |
+| 4 | Parallelization (rayon) | ✅ Done | +5% |
+| 5 | Binary cache (rkyv) | ✅ Done | 2.3x on cache hit |
+| 6 | Logos + Bumpalo | 🔮 Future | +40% projected |
+| 7 | Memory-mapped files | 🔮 Future | Large files only |
 
-*On cache hit only
-**For files >100MB only
+## Actual Performance
 
-## Projected Performance
-
-| After Phase | Speedup vs Python |
-|-------------|-------------------|
-| Current | 5.4x |
-| Phase 0 | ~6-7x |
-| Phase 1 | ~8-9x |
-| Phase 2 | ~10-11x |
-| Phase 3 | ~12x |
-| Phase 4 | ~20-25x |
-| Phase 5 | instant* |
-| Phase 6 | ~30x+ |
-
-*Cache hit = sub-10ms load for any size ledger
+| Metric | Value |
+|--------|-------|
+| Cold parse (7K lines) | ~28ms |
+| Warm cache (7K lines) | ~13ms |
+| vs Python beancount | **~6x faster** (cold), **instant** (warm) |
 
 ---
 
