@@ -117,6 +117,12 @@ jobs:
           echo "rust_ms=$avg" >> $GITHUB_OUTPUT
           echo "rustledger: ${avg}ms"
 
+      - name: Fetch existing history from benchmarks branch
+        run: |
+          mkdir -p .github/badges
+          curl -sSf https://raw.githubusercontent.com/${{ github.repository }}/benchmarks/.github/badges/benchmark-history.json \
+            -o .github/badges/benchmark-history.json 2>/dev/null || echo "[]" > .github/badges/benchmark-history.json
+
       - name: Update results and generate chart
         run: |
           python3 << 'EOF'
@@ -134,14 +140,9 @@ jobs:
           now = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
           date_short = datetime.utcnow().strftime('%Y-%m-%d')
 
-          # Load existing history
+          # Load existing history (fetched from benchmarks branch)
           history_file = Path('.github/badges/benchmark-history.json')
-          history_file.parent.mkdir(parents=True, exist_ok=True)
-
-          if history_file.exists():
-              history = json.loads(history_file.read_text())
-          else:
-              history = []
+          history = json.loads(history_file.read_text())
 
           # Append new result (keep last 90 days)
           history.append({
