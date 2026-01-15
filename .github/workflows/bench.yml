@@ -243,10 +243,26 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           cat .github/badges/benchmark.json | jq -r '"**Speedup: \(.speedup)x faster**"' >> $GITHUB_STEP_SUMMARY
 
-      - name: Commit results
+      - name: Commit results to benchmarks branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Save the generated files
+          cp -r .github/badges /tmp/badges
+
+          # Fetch and checkout benchmarks branch (create if doesn't exist)
+          git fetch origin benchmarks || true
+          if git rev-parse --verify origin/benchmarks >/dev/null 2>&1; then
+            git checkout benchmarks
+          else
+            git checkout --orphan benchmarks
+            git rm -rf . || true
+            mkdir -p .github/badges
+          fi
+
+          # Copy results and commit
+          cp -r /tmp/badges/* .github/badges/
           git add .github/badges/
-          git diff --staged --quiet || git commit -m "chore: update benchmark results [skip ci]"
-          git push || echo "Nothing to push"
+          git diff --staged --quiet || git commit -m "chore: update benchmark results"
+          git push origin benchmarks
