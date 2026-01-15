@@ -156,17 +156,12 @@ jobs:
           # Save history
           history_file.write_text(json.dumps(history, indent=2))
 
-          # Save current badge JSON
+          # Save current badge JSON (shields.io endpoint format - only allowed properties)
           badge = {
               'schemaVersion': 1,
               'label': 'speedup',
               'message': f'{speedup}x faster',
-              'color': 'brightgreen' if speedup >= 5 else 'green' if speedup >= 2 else 'yellow',
-              'python_ms': python_ms,
-              'rust_ms': rust_ms,
-              'speedup': speedup,
-              'transactions': 10000,
-              'updated': now
+              'color': 'brightgreen' if speedup >= 5 else 'green' if speedup >= 2 else 'yellow'
           }
           Path('.github/badges/benchmark.json').write_text(json.dumps(badge, indent=2))
 
@@ -234,14 +229,17 @@ jobs:
 
       - name: Update summary
         run: |
+          python_ms=${{ steps.python_bench.outputs.python_ms }}
+          rust_ms=${{ steps.rust_bench.outputs.rust_ms }}
+          speedup=$(echo "scale=1; $python_ms / $rust_ms" | bc)
           echo "## Benchmark Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          cat .github/badges/benchmark.json | jq -r '"| Tool | Time |"' >> $GITHUB_STEP_SUMMARY
+          echo "| Tool | Time |" >> $GITHUB_STEP_SUMMARY
           echo "|------|------|" >> $GITHUB_STEP_SUMMARY
-          cat .github/badges/benchmark.json | jq -r '"| Python beancount | \(.python_ms)ms |"' >> $GITHUB_STEP_SUMMARY
-          cat .github/badges/benchmark.json | jq -r '"| rustledger | \(.rust_ms)ms |"' >> $GITHUB_STEP_SUMMARY
+          echo "| Python beancount | ${python_ms}ms |" >> $GITHUB_STEP_SUMMARY
+          echo "| rustledger | ${rust_ms}ms |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          cat .github/badges/benchmark.json | jq -r '"**Speedup: \(.speedup)x faster**"' >> $GITHUB_STEP_SUMMARY
+          echo "**Speedup: ${speedup}x faster**" >> $GITHUB_STEP_SUMMARY
 
       - name: Commit results to benchmarks branch
         run: |
