@@ -612,4 +612,221 @@ mod tests {
             100.0 / deserialize_time.as_millis() as f64
         );
     }
+
+    #[test]
+    fn test_cache_path() {
+        let source = Path::new("/tmp/ledger.beancount");
+        let cache = cache_path(source);
+        assert_eq!(cache, Path::new("/tmp/ledger.beancount.cache"));
+
+        let source2 = Path::new("relative/path/my.beancount");
+        let cache2 = cache_path(source2);
+        assert_eq!(cache2, Path::new("relative/path/my.beancount.cache"));
+    }
+
+    #[test]
+    fn test_save_load_cache_entry_roundtrip() {
+        use std::io::Write;
+
+        // Create a temp directory
+        let temp_dir = std::env::temp_dir().join("rustledger_cache_test");
+        let _ = fs::create_dir_all(&temp_dir);
+
+        // Create a temp beancount file
+        let beancount_file = temp_dir.join("test.beancount");
+        let mut f = fs::File::create(&beancount_file).unwrap();
+        writeln!(f, "2024-01-01 open Assets:Test").unwrap();
+        drop(f);
+
+        // Create a cache entry
+        let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let txn = Transaction::new(date, "Test").with_posting(Posting::auto("Assets:Test"));
+        let directives = vec![Spanned::new(Directive::Transaction(txn), Span::new(0, 50))];
+
+        let entry = CacheEntry {
+            directives,
+            options: CachedOptions::from(&Options::new()),
+            plugins: vec![CachedPlugin {
+                name: "test_plugin".to_string(),
+                config: Some("config".to_string()),
+            }],
+            files: vec![beancount_file.to_string_lossy().to_string()],
+        };
+
+        // Save cache
+        save_cache_entry(&beancount_file, &entry).expect("save failed");
+
+        // Load cache
+        let loaded = load_cache_entry(&beancount_file).expect("load failed");
+
+        // Verify
+        assert_eq!(loaded.directives.len(), entry.directives.len());
+        assert_eq!(loaded.plugins.len(), 1);
+        assert_eq!(loaded.plugins[0].name, "test_plugin");
+        assert_eq!(loaded.plugins[0].config, Some("config".to_string()));
+        assert_eq!(loaded.files.len(), 1);
+
+        // Cleanup
+        let _ = fs::remove_file(&beancount_file);
+        let _ = fs::remove_file(cache_path(&beancount_file));
+        let _ = fs::remove_dir(&temp_dir);
+    }
+
+    #[test]
+    fn test_invalidate_cache() {
+        use std::io::Write;
+
+        let temp_dir = std::env::temp_dir().join("rustledger_invalidate_test");
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let beancount_file = temp_dir.join("test.beancount");
+        let mut f = fs::File::create(&beancount_file).unwrap();
+        writeln!(f, "2024-01-01 open Assets:Test").unwrap();
+        drop(f);
+
+        // Create and save a cache
+        let entry = CacheEntry {
+            directives: vec![],
+            options: CachedOptions::from(&Options::new()),
+            plugins: vec![],
+            files: vec![beancount_file.to_string_lossy().to_string()],
+        };
+        save_cache_entry(&beancount_file, &entry).unwrap();
+
+        // Verify cache exists
+        assert!(cache_path(&beancount_file).exists());
+
+        // Invalidate
+        invalidate_cache(&beancount_file);
+
+        // Verify cache is gone
+        assert!(!cache_path(&beancount_file).exists());
+
+        // Cleanup
+        let _ = fs::remove_file(&beancount_file);
+        let _ = fs::remove_dir(&temp_dir);
+    }
+
+    #[test]
+    fn test_load_cache_missing_file() {
+        let missing = Path::new("/nonexistent/path/to/file.beancount");
+        assert!(load_cache_entry(missing).is_none());
+    }
+
+    #[test]
+    fn test_load_cache_invalid_magic() {
+        use std::io::Write;
+
+        let temp_dir = std::env::temp_dir().join("rustledger_magic_test");
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let cache_file = temp_dir.join("test.beancount.cache");
+        let mut f = fs::File::create(&cache_file).unwrap();
+        // Write invalid magic
+        f.write_all(b"INVALID\0").unwrap();
+        f.write_all(&[0u8; CacheHeader::SIZE - 8]).unwrap();
+        drop(f);
+
+        let beancount_file = temp_dir.join("test.beancount");
+        assert!(load_cache_entry(&beancount_file).is_none());
+
+        // Cleanup
+        let _ = fs::remove_file(&cache_file);
+        let _ = fs::remove_dir(&temp_dir);
+    }
+
+    #[test]
+    fn test_reintern_directives_deduplication() {
+        let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+
+        // Create multiple transactions with the same account
+        let mut directives = vec![];
+        for i in 0..5 {
+            let txn = Transaction::new(date, format!("Txn {i}"))
+                .with_posting(Posting::new(
+                    "Expenses:Food",
+                    Amount::new(dec!(10.00), "USD"),
+                ))
+                .with_posting(Posting::auto("Assets:Checking"));
+            directives.push(Spanned::new(Directive::Transaction(txn), Span::new(0, 50)));
+        }
+
+        // Re-intern should deduplicate the repeated account names and currencies
+        let dedup_count = reintern_directives(&mut directives);
+
+        // We should have deduplicated:
+        // - "Expenses:Food" appears 5 times but only first is new (4 dedup)
+        // - "USD" appears 5 times but only first is new (4 dedup)
+        // - "Assets:Checking" appears 5 times but only first is new (4 dedup)
+        // Total: 12 deduplications
+        assert_eq!(dedup_count, 12);
+    }
+
+    #[test]
+    fn test_cached_options_roundtrip() {
+        let mut opts = Options::new();
+        opts.title = Some("Test Ledger".to_string());
+        opts.operating_currency = vec!["USD".to_string(), "EUR".to_string()];
+        opts.render_commas = true;
+
+        let cached = CachedOptions::from(&opts);
+        let restored: Options = cached.into();
+
+        assert_eq!(restored.title, Some("Test Ledger".to_string()));
+        assert_eq!(restored.operating_currency, vec!["USD", "EUR"]);
+        assert!(restored.render_commas);
+    }
+
+    #[test]
+    fn test_cache_entry_file_paths() {
+        let entry = CacheEntry {
+            directives: vec![],
+            options: CachedOptions::from(&Options::new()),
+            plugins: vec![],
+            files: vec![
+                "/path/to/ledger.beancount".to_string(),
+                "/path/to/include.beancount".to_string(),
+            ],
+        };
+
+        let paths = entry.file_paths();
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths[0], PathBuf::from("/path/to/ledger.beancount"));
+        assert_eq!(paths[1], PathBuf::from("/path/to/include.beancount"));
+    }
+
+    #[test]
+    fn test_reintern_balance_directive() {
+        use rustledger_core::Balance;
+
+        let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let balance = Balance::new(date, "Assets:Checking", Amount::new(dec!(1000.00), "USD"));
+
+        let mut directives = vec![
+            Spanned::new(Directive::Balance(balance.clone()), Span::new(0, 50)),
+            Spanned::new(Directive::Balance(balance), Span::new(51, 100)),
+        ];
+
+        let dedup_count = reintern_directives(&mut directives);
+        // Second occurrence of "Assets:Checking" and "USD" should be deduplicated
+        assert_eq!(dedup_count, 2);
+    }
+
+    #[test]
+    fn test_reintern_open_close_directives() {
+        use rustledger_core::{Close, Open};
+
+        let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let open = Open::new(date, "Assets:Checking");
+        let close = Close::new(date, "Assets:Checking");
+
+        let mut directives = vec![
+            Spanned::new(Directive::Open(open), Span::new(0, 50)),
+            Spanned::new(Directive::Close(close), Span::new(51, 100)),
+        ];
+
+        let dedup_count = reintern_directives(&mut directives);
+        // Second "Assets:Checking" should be deduplicated
+        assert_eq!(dedup_count, 1);
+    }
 }
