@@ -139,7 +139,7 @@ cargo add rustledger-core rustledger-parser rustledger-loader
 | `rustledger-booking` | Interpolation and 7 booking methods |
 | `rustledger-validate` | 30 validation error codes |
 | `rustledger-query` | BQL query engine |
-| `rustledger-plugin` | 14 built-in plugins |
+| `rustledger-plugin` | 20 built-in plugins + Python plugin support |
 | `rustledger-importer` | CSV/OFX import framework |
 
 <details>
@@ -158,24 +158,32 @@ cargo add rustledger-core rustledger-parser rustledger-loader
 </details>
 
 <details>
-<summary><strong>Built-in plugins (14)</strong></summary>
+<summary><strong>Built-in plugins (20)</strong></summary>
 
 | Plugin | Description |
 |--------|-------------|
-| `implicit_prices` | Generate price entries from transaction costs |
-| `check_commodity` | Validate commodity declarations |
 | `auto_accounts` | Auto-generate Open directives |
-| `leafonly` | Error on postings to non-leaf accounts |
-| `noduplicates` | Hash-based duplicate transaction detection |
-| `onecommodity` | Single commodity per account |
-| `unique_prices` | One price per day per commodity pair |
+| `auto_tag` | Automatically tag transactions |
+| `check_average_cost` | Validate average cost bookings |
 | `check_closing` | Zero balance assertion on account close |
+| `check_commodity` | Validate commodity declarations |
+| `check_drained` | Ensure accounts are drained before close |
 | `close_tree` | Close descendant accounts |
 | `coherent_cost` | Enforce cost OR price (not both) |
-| `sellgains` | Cross-check capital gains against sales |
-| `pedantic` | Enable all strict validations |
-| `unrealized` | Calculate unrealized gains |
+| `commodity_attr` | Validate commodity attributes |
+| `currency_accounts` | Enforce currency constraints on accounts |
+| `document_discovery` | Auto-discover document files |
+| `implicit_prices` | Generate price entries from transaction costs |
+| `leafonly` | Error on postings to non-leaf accounts |
+| `noduplicates` | Hash-based duplicate transaction detection |
 | `nounused` | Warn on unused accounts |
+| `onecommodity` | Single commodity per account |
+| `pedantic` | Enable all strict validations |
+| `sellgains` | Cross-check capital gains against sales |
+| `unique_prices` | One price per day per commodity pair |
+| `unrealized` | Calculate unrealized gains |
+
+**Python plugins**: Run existing Python beancount plugins via CPython-WASI sandbox.
 
 </details>
 
