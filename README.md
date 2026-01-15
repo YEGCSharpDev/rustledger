@@ -37,6 +37,7 @@ Parse and validate your ledger faster than Python beancount.
 | **Nix** | `nix run github:rustledger/rustledger` |
 | **Docker** | `docker run --rm -v "$PWD:/data" ghcr.io/rustledger/rustledger /data/ledger.beancount` |
 | **Binaries** | [GitHub Releases](https://github.com/rustledger/rustledger/releases) |
+| **npm** | `npm install @rustledger/wasm` (WebAssembly) |
 
 ## Quick Start
 
@@ -81,23 +82,6 @@ rledger-format --in-place ledger.beancount
 ```
 
 </details>
-
-## Library Usage
-
-```rust
-use rustledger_loader::load;
-use std::path::Path;
-
-fn main() -> anyhow::Result<()> {
-    let result = load(Path::new("ledger.beancount"))?;
-    println!("Loaded {} directives", result.directives.len());
-    Ok(())
-}
-```
-
-```bash
-cargo add rustledger-core rustledger-parser rustledger-loader
-```
 
 ## Crates
 
@@ -171,22 +155,9 @@ cargo add rustledger-core rustledger-parser rustledger-loader
 
 <sub>Benchmarks run nightly on identical 10K transaction ledgers. [View workflow →](https://github.com/rustledger/rustledger/actions/workflows/bench.yml)</sub>
 
-## npm Packages
-
-```bash
-npm install @rustledger/wasm        # WebAssembly bindings
-npm install @rustledger/mcp-server  # MCP server for AI assistants
-```
-
 ## Contributing
 
-```bash
-cargo test --all-features
-cargo clippy --all-features
-cargo fmt
-```
-
-See [CLAUDE.md](CLAUDE.md) for architecture overview.
+See [CLAUDE.md](CLAUDE.md) for architecture and development setup.
 
 ## License
 
