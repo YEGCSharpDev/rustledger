@@ -288,13 +288,23 @@ jobs:
           VERSION=$RELEASE_TAG
           # WASM files are in artifacts root after merge-multiple
           mkdir -p wasm-pkg
-          cp artifacts/*.wasm artifacts/*.js artifacts/*.d.ts artifacts/package.json wasm-pkg/ 2>/dev/null || true
-          if [ -f "wasm-pkg/package.json" ]; then
-            cd wasm-pkg
-            tar -czvf "../artifacts/rustledger-wasm-${VERSION}.tar.gz" .
-            cd ..
-            shasum -a 256 "artifacts/rustledger-wasm-${VERSION}.tar.gz" > "artifacts/rustledger-wasm-${VERSION}.tar.gz.sha256"
+          cp artifacts/*.wasm artifacts/*.js artifacts/*.d.ts artifacts/package.json wasm-pkg/ 2>/dev/null
+          if [ ! -f "wasm-pkg/package.json" ]; then
+            echo "Error: wasm-pkg/package.json not found; cannot package WASM artifacts." >&2
+            exit 1
           fi
+          if ! ls wasm-pkg/*.wasm >/dev/null 2>&1; then
+            echo "Error: No .wasm files found in wasm-pkg; WASM build may have failed." >&2
+            exit 1
+          fi
+          if ! ls wasm-pkg/*.js >/dev/null 2>&1; then
+            echo "Error: No .js files found in wasm-pkg; WASM build may have failed." >&2
+            exit 1
+          fi
+          cd wasm-pkg
+          tar -czvf "../artifacts/rustledger-wasm-${VERSION}.tar.gz" .
+          cd ..
+          shasum -a 256 "artifacts/rustledger-wasm-${VERSION}.tar.gz" > "artifacts/rustledger-wasm-${VERSION}.tar.gz.sha256"
       - name: List artifacts
         run: ls -la artifacts/
       - name: Create Release
