@@ -79,10 +79,17 @@ impl Value {
                 for pos in inv.positions() {
                     pos.units.number.serialize().hash(state);
                     pos.units.currency.as_str().hash(state);
+                    if let Some(cost) = &pos.cost {
+                        cost.number.serialize().hash(state);
+                        cost.currency.as_str().hash(state);
+                    }
                 }
             }
             Self::StringSet(ss) => {
-                for s in ss {
+                // Hash StringSet in a canonical, order-independent way by sorting first.
+                let mut sorted = ss.clone();
+                sorted.sort();
+                for s in &sorted {
                     s.hash(state);
                 }
             }

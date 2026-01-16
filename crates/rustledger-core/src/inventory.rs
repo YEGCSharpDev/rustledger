@@ -286,6 +286,7 @@ impl Inventory {
         if position.cost.is_none() {
             if let Some(&idx) = self.simple_index.get(&position.units.currency) {
                 // Merge with existing position
+                debug_assert!(self.positions[idx].cost.is_none());
                 self.positions[idx].units += &position.units;
                 return;
             }
@@ -797,6 +798,11 @@ impl Inventory {
         self.simple_index.clear();
         for (idx, pos) in self.positions.iter().enumerate() {
             if pos.cost.is_none() {
+                debug_assert!(
+                    !self.simple_index.contains_key(&pos.units.currency),
+                    "Invariant violated: multiple simple positions for currency {}",
+                    pos.units.currency
+                );
                 self.simple_index.insert(pos.units.currency.clone(), idx);
             }
         }
