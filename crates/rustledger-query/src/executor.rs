@@ -3,7 +3,8 @@
 //! Executes parsed BQL queries against a set of Beancount directives.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 
 use chrono::Datelike;
 use regex::Regex;
@@ -42,6 +43,70 @@ pub enum Value {
     StringSet(Vec<String>),
     /// NULL value.
     Null,
+}
+
+impl Value {
+    /// Compute a hash for this value.
+    ///
+    /// Note: This is not the standard Hash trait because some contained types
+    /// (Decimal, Inventory) don't implement Hash. We use byte representations
+    /// for those types.
+    fn hash_value<H: Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Self::String(s) => s.hash(state),
+            Self::Number(d) => d.serialize().hash(state),
+            Self::Integer(i) => i.hash(state),
+            Self::Date(d) => {
+                d.year().hash(state);
+                d.month().hash(state);
+                d.day().hash(state);
+            }
+            Self::Boolean(b) => b.hash(state),
+            Self::Amount(a) => {
+                a.number.serialize().hash(state);
+                a.currency.as_str().hash(state);
+            }
+            Self::Position(p) => {
+                p.units.number.serialize().hash(state);
+                p.units.currency.as_str().hash(state);
+                if let Some(cost) = &p.cost {
+                    cost.number.serialize().hash(state);
+                    cost.currency.as_str().hash(state);
+                }
+            }
+            Self::Inventory(inv) => {
+                for pos in inv.positions() {
+                    pos.units.number.serialize().hash(state);
+                    pos.units.currency.as_str().hash(state);
+                }
+            }
+            Self::StringSet(ss) => {
+                for s in ss {
+                    s.hash(state);
+                }
+            }
+            Self::Null => {}
+        }
+    }
+}
+
+/// Compute a hash for a row (for DISTINCT deduplication).
+fn hash_row(row: &Row) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    let mut hasher = DefaultHasher::new();
+    for value in row {
+        value.hash_value(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Compute a hash for a single value (for PIVOT lookups).
+fn hash_single_value(value: &Value) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    let mut hasher = DefaultHasher::new();
+    value.hash_value(&mut hasher);
+    hasher.finish()
 }
 
 /// A row of query results.
@@ -233,6 +298,13 @@ impl<'a> Executor<'a> {
             };
 
             // Simple query - one row per posting
+            // Use HashSet for O(1) DISTINCT deduplication instead of O(n) contains()
+            let mut seen_hashes: HashSet<u64> = if query.distinct {
+                HashSet::with_capacity(postings.len())
+            } else {
+                HashSet::new()
+            };
+
             for (i, ctx) in postings.iter().enumerate() {
                 let row = if let Some(ref wctxs) = window_contexts {
                     self.evaluate_row_with_window(&query.targets, ctx, Some(&wctxs[i]))?
@@ -240,8 +312,9 @@ impl<'a> Executor<'a> {
                     self.evaluate_row(&query.targets, ctx)?
                 };
                 if query.distinct {
-                    // Check for duplicates
-                    if !result.rows.contains(&row) {
+                    // O(1) hash-based deduplication
+                    let row_hash = hash_row(&row);
+                    if seen_hashes.insert(row_hash) {
                         result.add_row(row);
                     }
                 } else {
@@ -290,6 +363,13 @@ impl<'a> Executor<'a> {
             self.resolve_subquery_column_names(&outer_query.targets, &inner_result.columns)?;
         let mut result = QueryResult::new(outer_column_names);
 
+        // Use HashSet for O(1) DISTINCT deduplication
+        let mut seen_hashes: HashSet<u64> = if outer_query.distinct {
+            HashSet::with_capacity(inner_result.rows.len())
+        } else {
+            HashSet::new()
+        };
+
         // Process each row from the inner result
         for inner_row in &inner_result.rows {
             // Apply outer WHERE clause if present
@@ -304,7 +384,9 @@ impl<'a> Executor<'a> {
                 self.evaluate_subquery_row(&outer_query.targets, inner_row, &inner_column_map)?;
 
             if outer_query.distinct {
-                if !result.rows.contains(&outer_row) {
+                // O(1) hash-based deduplication
+                let row_hash = hash_row(&outer_row);
+                if seen_hashes.insert(row_hash) {
                     result.add_row(outer_row);
                 }
             } else {
@@ -2805,13 +2887,25 @@ impl<'a> Executor<'a> {
                 .map(|&i| group_rows[0][i].clone())
                 .collect();
 
-            // Add pivot values
+            // Build O(1) pivot value -> row index for this group
+            let pivot_index: HashMap<u64, usize> = group_rows
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, row)| {
+                    row.get(pivot_col_idx).map(|v| (hash_single_value(v), idx))
+                })
+                .collect();
+
+            // Add pivot values with O(1) lookup
             for pv in &pivot_values {
-                let matching_row = group_rows
-                    .iter()
-                    .find(|row| row.get(pivot_col_idx).is_some_and(|v| v == pv));
-                if let Some(row) = matching_row {
-                    new_row.push(row.get(value_col_idx).cloned().unwrap_or(Value::Null));
+                let pv_hash = hash_single_value(pv);
+                if let Some(&row_idx) = pivot_index.get(&pv_hash) {
+                    new_row.push(
+                        group_rows[row_idx]
+                            .get(value_col_idx)
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                    );
                 } else {
                     new_row.push(Value::Null);
                 }
