@@ -34,6 +34,7 @@ mod error;
 pub mod logos_lexer;
 mod parser;
 mod span;
+mod token_input;
 
 pub use error::{ParseError, ParseErrorKind};
 pub use span::{Span, Spanned};
