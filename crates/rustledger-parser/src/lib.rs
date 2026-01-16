@@ -30,9 +30,7 @@
 #![warn(missing_docs)]
 
 mod error;
-// mod lexer; // Disabled - using direct parser instead
 pub mod logos_lexer;
-mod parser;
 mod span;
 mod token_input;
 mod token_parser;
@@ -59,8 +57,7 @@ pub struct ParseResult {
 
 /// Parse beancount source code.
 ///
-/// Returns a tuple of (directives, errors). The parser uses error recovery
-/// to continue parsing after encountering errors, so both may be non-empty.
+/// Uses a fast token-based parser (Logos lexer + Chumsky combinators).
 ///
 /// # Arguments
 ///
@@ -70,7 +67,7 @@ pub struct ParseResult {
 ///
 /// A `ParseResult` containing directives, options, includes, plugins, and errors.
 pub fn parse(source: &str) -> ParseResult {
-    parser::parse(source)
+    token_parser::parse(source)
 }
 
 /// Parse beancount source code, returning only directives and errors.
@@ -79,12 +76,4 @@ pub fn parse(source: &str) -> ParseResult {
 pub fn parse_directives(source: &str) -> (Vec<Spanned<Directive>>, Vec<ParseError>) {
     let result = parse(source);
     (result.directives, result.errors)
-}
-
-/// Parse beancount source code using the token-based parser.
-///
-/// This is an experimental API using the Logos lexer + Chumsky token parser.
-/// It may produce different results than the standard parser.
-pub fn parse_with_tokens(source: &str) -> ParseResult {
-    token_parser::parse(source)
 }

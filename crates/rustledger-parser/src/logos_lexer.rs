@@ -41,8 +41,8 @@ pub enum Token<'src> {
     Date(&'src str),
 
     /// A number with optional sign, thousands separators, and decimals.
-    /// Examples: 123, -456, 1,234.56, 1234.5678
-    #[regex(r"-?(\d{1,3}(,\d{3})*|\d+)(\.\d+)?")]
+    /// Examples: 123, -456, 1,234.56, 1234.5678, .50, -.50
+    #[regex(r"-?(\.\d+|(\d{1,3}(,\d{3})*|\d+)(\.\d+)?)")]
     Number(&'src str),
 
     /// A double-quoted string (handles escape sequences).
@@ -50,16 +50,18 @@ pub enum Token<'src> {
     #[regex(r#""([^"\\]|\\.)*""#)]
     String(&'src str),
 
-    /// An account name like Assets:Bank:Checking.
+    /// An account name like Assets:Bank:Checking or Assets:401k:Fidelity.
     /// Must start with one of the 5 account types and have at least one sub-account.
-    #[regex(r"(Assets|Liabilities|Equity|Income|Expenses)(:[A-Z][a-zA-Z0-9-]*)+")]
+    /// Sub-accounts can start with uppercase letter or digit.
+    #[regex(r"(Assets|Liabilities|Equity|Income|Expenses)(:[A-Za-z0-9][a-zA-Z0-9-]*)+")]
     Account(&'src str),
 
     /// A currency/commodity code like USD, EUR, AAPL, BTC.
     /// Uppercase letters, can contain digits, apostrophes, dots, underscores, hyphens.
     /// Note: This pattern is lower priority than Account, Keywords, and Flags.
     /// Currency must have at least 2 characters to avoid conflict with single-letter flags.
-    #[regex(r"[A-Z][A-Z0-9'._-]+")]
+    /// Also supports `/` prefix for options/futures contracts (e.g., `/LOX21_211204_P100.25`).
+    #[regex(r"/[A-Z0-9'._-]+|[A-Z][A-Z0-9'._-]+")]
     Currency(&'src str),
 
     /// A tag like #tag-name.
@@ -129,11 +131,15 @@ pub enum Token<'src> {
     /// The `popmeta` directive keyword.
     #[token("popmeta")]
     Popmeta,
-    /// The `TRUE` boolean literal.
+    /// The `TRUE` boolean literal (also True, true).
     #[token("TRUE")]
+    #[token("True")]
+    #[token("true")]
     True,
-    /// The `FALSE` boolean literal.
+    /// The `FALSE` boolean literal (also False, false).
     #[token("FALSE")]
+    #[token("False")]
+    #[token("false")]
     False,
     /// The `NULL` literal.
     #[token("NULL")]
@@ -141,12 +147,15 @@ pub enum Token<'src> {
 
     // ===== Punctuation =====
     // Order matters: longer tokens first
-    /// Double left brace `{{` for cost specifications.
+    /// Double left brace `{{` for cost specifications (legacy total cost).
     #[token("{{")]
     LDoubleBrace,
     /// Double right brace `}}` for cost specifications.
     #[token("}}")]
     RDoubleBrace,
+    /// Left brace with hash `{#` for total cost (new syntax).
+    #[token("{#")]
+    LBraceHash,
     /// Left brace `{` for cost specifications.
     #[token("{")]
     LBrace,
@@ -192,8 +201,9 @@ pub enum Token<'src> {
     #[token("!")]
     Pending,
 
-    /// Other transaction flags: P S T C U R M ? % &
-    #[regex(r"[PSTCURM?%&]")]
+    /// Other transaction flags: P S T C U R M # ? % &
+    /// Note: # is only a flag when NOT followed by tag characters
+    #[regex(r"[PSTCURM#?%&]")]
     Flag(&'src str),
 
     // ===== Structural =====
@@ -206,15 +216,29 @@ pub enum Token<'src> {
     #[regex(r";[^\n\r]*")]
     Comment(&'src str),
 
-    /// A metadata key (lowercase identifier followed by colon).
-    /// Examples: filename:, lineno:, custom-key:
-    /// The slice includes the trailing colon.
-    #[regex(r"[a-z][a-z0-9_-]*:")]
+    /// Shebang line at start of file (e.g., #!/usr/bin/env bean-web).
+    /// Treated as a comment-like directive to skip.
+    #[regex(r"#![^\n\r]*")]
+    Shebang(&'src str),
+
+    /// Emacs org-mode directive (e.g., "#+STARTUP: showall").
+    /// These are Emacs configuration lines that should be skipped.
+    #[regex(r"#\+[^\n\r]*")]
+    EmacsDirective(&'src str),
+
+    /// A metadata key (identifier followed by colon).
+    /// Examples: filename:, lineno:, custom-key:, nameOnCard:
+    /// The slice includes the trailing colon. Keys can use camelCase or `snake_case`.
+    #[regex(r"[a-zA-Z][a-zA-Z0-9_-]*:")]
     MetaKey(&'src str),
 
     /// Indentation token (inserted by post-processing, not by Logos).
+    /// Contains the number of leading spaces.
     /// This is a placeholder - actual indentation detection happens in [`tokenize`].
-    Indent,
+    Indent(usize),
+
+    /// Deep indentation (4+ spaces) - used for posting-level metadata.
+    DeepIndent(usize),
 
     /// Error token for unrecognized input.
     Error,
@@ -287,6 +311,7 @@ impl fmt::Display for Token<'_> {
             Self::Null => write!(f, "NULL"),
             Self::LDoubleBrace => write!(f, "{{{{"),
             Self::RDoubleBrace => write!(f, "}}}}"),
+            Self::LBraceHash => write!(f, "{{#"),
             Self::LBrace => write!(f, "{{"),
             Self::RBrace => write!(f, "}}"),
             Self::LParen => write!(f, "("),
@@ -304,8 +329,11 @@ impl fmt::Display for Token<'_> {
             Self::Flag(s) => write!(f, "{s}"),
             Self::Newline => write!(f, "\\n"),
             Self::Comment(s) => write!(f, "{s}"),
+            Self::Shebang(s) => write!(f, "{s}"),
+            Self::EmacsDirective(s) => write!(f, "{s}"),
             Self::MetaKey(s) => write!(f, "{s}"),
-            Self::Indent => write!(f, "<indent>"),
+            Self::Indent(n) => write!(f, "<indent:{n}>"),
+            Self::DeepIndent(n) => write!(f, "<deep-indent:{n}>"),
             Self::Error => write!(f, "<error>"),
         }
     }
@@ -335,14 +363,35 @@ pub fn tokenize(source: &str) -> Vec<(Token<'_>, Span)> {
             Ok(token) => {
                 // Check for indentation at line start
                 if at_line_start && span.start > last_newline_end {
-                    // Count leading spaces between last newline and this token
+                    // Count leading whitespace between last newline and this token
+                    // Tabs count as indentation (treat 1 tab as 4 spaces for counting purposes)
                     let leading = &source[last_newline_end..span.start];
-                    let space_count = leading.chars().take_while(|c| *c == ' ').count();
+                    let mut space_count = 0;
+                    let mut char_count = 0;
+                    for c in leading.chars() {
+                        match c {
+                            ' ' => {
+                                space_count += 1;
+                                char_count += 1;
+                            }
+                            '\t' => {
+                                space_count += 4; // Treat tab as 4 spaces
+                                char_count += 1;
+                            }
+                            _ => break,
+                        }
+                    }
                     if space_count >= 2 {
                         let indent_start = last_newline_end;
-                        let indent_end = last_newline_end + space_count;
+                        let indent_end = last_newline_end + char_count;
+                        // Use DeepIndent for 4+ spaces (posting metadata level)
+                        let indent_token = if space_count >= 4 {
+                            Token::DeepIndent(space_count)
+                        } else {
+                            Token::Indent(space_count)
+                        };
                         tokens.push((
-                            Token::Indent,
+                            indent_token,
                             Span {
                                 start: indent_start,
                                 end: indent_end,
@@ -439,7 +488,7 @@ mod tests {
     fn test_tokenize_indentation() {
         let tokens = tokenize("txn\n  Assets:Bank 100 USD");
         // Should have: Txn, Newline, Indent, Account, Number, Currency
-        assert!(tokens.iter().any(|(t, _)| matches!(t, Token::Indent)));
+        assert!(tokens.iter().any(|(t, _)| matches!(t, Token::Indent(_))));
     }
 
     #[test]
@@ -453,7 +502,9 @@ mod tests {
         assert!(tokens.iter().any(|(t, _)| matches!(t, Token::String(_))));
         assert!(tokens.iter().any(|(t, _)| matches!(t, Token::Tag(_))));
         assert!(tokens.iter().any(|(t, _)| matches!(t, Token::Newline)));
-        assert!(tokens.iter().any(|(t, _)| matches!(t, Token::Indent)));
+        assert!(tokens
+            .iter()
+            .any(|(t, _)| matches!(t, Token::Indent(_) | Token::DeepIndent(_))));
         assert!(tokens.iter().any(|(t, _)| matches!(t, Token::Account(_))));
         assert!(tokens.iter().any(|(t, _)| matches!(t, Token::Number(_))));
         assert!(tokens.iter().any(|(t, _)| matches!(t, Token::Currency(_))));

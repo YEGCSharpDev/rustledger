@@ -207,36 +207,34 @@ fn tok_currency<'src>(
         })
 }
 
-/// Match a tag token and extract the string (including #).
+/// Match a tag token and extract the string (without # prefix).
 fn tok_tag<'src>(
 ) -> impl Parser<'src, &'src [SpannedToken<'src>], &'src str, TokExtra<'src>> + Clone {
     any()
         .filter(|t: &SpannedToken<'_>| matches!(t.token, Token::Tag(_)))
-        .map(
-            |t: SpannedToken<'src>| {
-                if let Token::Tag(s) = t.token {
-                    s
-                } else {
-                    ""
-                }
-            },
-        )
+        .map(|t: SpannedToken<'src>| {
+            if let Token::Tag(s) = t.token {
+                // Strip the leading '#'
+                &s[1..]
+            } else {
+                ""
+            }
+        })
 }
 
-/// Match a link token and extract the string (including ^).
+/// Match a link token and extract the string (without ^ prefix).
 fn tok_link<'src>(
 ) -> impl Parser<'src, &'src [SpannedToken<'src>], &'src str, TokExtra<'src>> + Clone {
     any()
         .filter(|t: &SpannedToken<'_>| matches!(t.token, Token::Link(_)))
-        .map(
-            |t: SpannedToken<'src>| {
-                if let Token::Link(s) = t.token {
-                    s
-                } else {
-                    ""
-                }
-            },
-        )
+        .map(|t: SpannedToken<'src>| {
+            if let Token::Link(s) = t.token {
+                // Strip the leading '^'
+                &s[1..]
+            } else {
+                ""
+            }
+        })
 }
 
 /// Match a metadata key token and extract the key (without colon).
@@ -296,10 +294,19 @@ fn tok_newline<'src>() -> impl Parser<'src, &'src [SpannedToken<'src>], (), TokE
         .to(())
 }
 
-/// Match an indent token.
+/// Match any indent token (2+ spaces).
+/// Beancount accepts any indentation level for metadata and postings.
 fn tok_indent<'src>() -> impl Parser<'src, &'src [SpannedToken<'src>], (), TokExtra<'src>> + Clone {
     any()
-        .filter(|t: &SpannedToken<'_>| matches!(t.token, Token::Indent))
+        .filter(|t: &SpannedToken<'_>| matches!(t.token, Token::Indent(_) | Token::DeepIndent(_)))
+        .to(())
+}
+
+/// Match a deep indent token (4+ spaces) - for posting metadata.
+fn tok_deep_indent<'src>(
+) -> impl Parser<'src, &'src [SpannedToken<'src>], (), TokExtra<'src>> + Clone {
+    any()
+        .filter(|t: &SpannedToken<'_>| matches!(t.token, Token::DeepIndent(_)))
         .to(())
 }
 
@@ -354,6 +361,7 @@ tok_punct!(tok_lbrace, LBrace);
 tok_punct!(tok_rbrace, RBrace);
 tok_punct!(tok_ldoublebrace, LDoubleBrace);
 tok_punct!(tok_rdoublebrace, RDoubleBrace);
+tok_punct!(tok_lbracehash, LBraceHash);
 tok_punct!(tok_lparen, LParen);
 tok_punct!(tok_rparen, RParen);
 tok_punct!(tok_at, At);
@@ -448,77 +456,220 @@ fn tok_incomplete_amount<'src>(
     ))
 }
 
-/// Parse a cost specification: { ... } or {{ ... }}.
-fn tok_cost_spec<'src>(
-) -> impl Parser<'src, &'src [SpannedToken<'src>], CostSpec, TokExtra<'src>> + Clone {
-    // Per-unit cost parser
-    let per_unit_inner = tok_number()
-        .or_not()
-        .then(tok_currency().or_not())
-        .then(tok_comma().ignore_then(tok_date()).or_not())
-        .then(tok_comma().ignore_then(tok_string()).or_not())
-        .map(|(((number, currency), date), label)| {
-            let mut spec = CostSpec::default();
-            if let Some(n) = number {
-                spec.number_per = Some(n);
-            }
-            if let Some(c) = currency {
-                spec.currency = Some(c.into());
-            }
-            if let Some(d) = date {
-                spec.date = Some(d);
-            }
-            if let Some(l) = label {
-                spec.label = Some(l);
-            }
-            spec
-        });
+/// A cost component - can be amount, number, currency, date, label, merge, or hash.
+#[derive(Debug, Clone)]
+enum TokCostComponent {
+    /// Number + currency
+    Amount(Decimal, String),
+    /// Number only
+    NumberOnly(Decimal),
+    /// Currency only
+    CurrencyOnly(String),
+    /// Date
+    Date(NaiveDate),
+    /// String label
+    Label(String),
+    /// Merge marker (*)
+    Merge,
+    /// Hash separator (#) for per-unit/total syntax
+    Hash,
+}
 
-    // Total cost parser
-    let total_inner = tok_number()
-        .or_not()
-        .then(tok_currency().or_not())
-        .then(tok_comma().ignore_then(tok_date()).or_not())
-        .then(tok_comma().ignore_then(tok_string()).or_not())
-        .map(|(((number, currency), date), label)| {
-            let mut spec = CostSpec::default();
-            if let Some(n) = number {
-                spec.number_total = Some(n);
-            }
-            if let Some(c) = currency {
-                spec.currency = Some(c.into());
-            }
-            if let Some(d) = date {
-                spec.date = Some(d);
-            }
-            if let Some(l) = label {
-                spec.label = Some(l);
-            }
-            spec
-        });
+/// Parse a hash token (# used as separator in cost specs).
+fn tok_hash<'src>() -> impl Parser<'src, &'src [SpannedToken<'src>], (), TokExtra<'src>> + Clone {
+    any()
+        .filter(|t: &SpannedToken<'_>| matches!(t.token, Token::Flag("#")))
+        .to(())
+}
 
+/// Parse a single cost component.
+fn tok_cost_component<'src>(
+) -> impl Parser<'src, &'src [SpannedToken<'src>], TokCostComponent, TokExtra<'src>> + Clone {
     choice((
-        // Total cost: {{ ... }}
-        tok_ldoublebrace()
-            .ignore_then(total_inner)
-            .then_ignore(tok_rdoublebrace()),
-        // Per-unit cost: { ... }
-        tok_lbrace()
-            .ignore_then(per_unit_inner)
-            .then_ignore(tok_rbrace()),
+        // Date (must come before number to avoid conflicts)
+        tok_date().map(TokCostComponent::Date),
+        // Amount (expr followed by currency) - use tok_expr() for arithmetic
+        tok_expr()
+            .then(tok_currency())
+            .map(|(n, c)| TokCostComponent::Amount(n, c.to_string())),
+        // Number only (expr for arithmetic)
+        tok_expr().map(TokCostComponent::NumberOnly),
+        // Currency only (must come after amount to avoid conflicts)
+        tok_currency().map(|c| TokCostComponent::CurrencyOnly(c.to_string())),
+        // String label
+        tok_string().map(TokCostComponent::Label),
+        // Merge marker
+        tok_star().to(TokCostComponent::Merge),
+        // Hash separator for per-unit # total syntax
+        tok_hash().to(TokCostComponent::Hash),
     ))
 }
 
-/// Parse a price annotation: @ amount or @@ amount.
+/// Build a `CostSpec` from parsed components.
+/// Handles the `#` syntax for combining per-unit and total costs:
+/// - `{150 USD}` - per-unit cost
+/// - `{{150 USD}}` - total cost
+/// - `{150 # 5 USD}` - per-unit=150, total=5, currency=USD
+/// - `{# 5 USD}` - total only
+fn build_tok_cost_spec(components: Vec<TokCostComponent>, is_total_brace: bool) -> CostSpec {
+    let mut spec = CostSpec::default();
+
+    // Find if there's a hash separator
+    let hash_pos = components
+        .iter()
+        .position(|c| matches!(c, TokCostComponent::Hash));
+
+    // If hash present, components before # are per-unit, after # are total
+    // If no hash, all components go to per-unit (or total if double-brace/brace-hash)
+    let (per_unit_comps, total_comps): (Vec<_>, Vec<_>) = if let Some(pos) = hash_pos {
+        let (before, after) = components.split_at(pos);
+        (before.to_vec(), after[1..].to_vec()) // Skip the hash itself
+    } else if is_total_brace {
+        (vec![], components)
+    } else {
+        (components, vec![])
+    };
+
+    // Process per-unit components
+    for comp in per_unit_comps {
+        match comp {
+            TokCostComponent::Amount(num, curr) => {
+                spec.number_per = Some(num);
+                spec.currency = Some(curr.into());
+            }
+            TokCostComponent::NumberOnly(num) => {
+                spec.number_per = Some(num);
+            }
+            TokCostComponent::CurrencyOnly(curr) => {
+                if spec.currency.is_none() {
+                    spec.currency = Some(curr.into());
+                }
+            }
+            TokCostComponent::Date(d) => {
+                spec.date = Some(d);
+            }
+            TokCostComponent::Label(l) => {
+                spec.label = Some(l);
+            }
+            TokCostComponent::Merge => {
+                spec.merge = true;
+            }
+            TokCostComponent::Hash => {}
+        }
+    }
+
+    // Process total components
+    for comp in total_comps {
+        match comp {
+            TokCostComponent::Amount(num, curr) => {
+                spec.number_total = Some(num);
+                spec.currency = Some(curr.into());
+            }
+            TokCostComponent::NumberOnly(num) => {
+                spec.number_total = Some(num);
+            }
+            TokCostComponent::CurrencyOnly(curr) => {
+                if spec.currency.is_none() {
+                    spec.currency = Some(curr.into());
+                }
+            }
+            TokCostComponent::Date(d) => {
+                spec.date = Some(d);
+            }
+            TokCostComponent::Label(l) => {
+                spec.label = Some(l);
+            }
+            TokCostComponent::Merge => {
+                spec.merge = true;
+            }
+            TokCostComponent::Hash => {}
+        }
+    }
+
+    spec
+}
+
+/// Parse cost components with optional commas/slashes as delimiters.
+/// Allows empty components: {, 100.0 USD, , }
+fn tok_cost_components<'src>(
+) -> impl Parser<'src, &'src [SpannedToken<'src>], Vec<TokCostComponent>, TokExtra<'src>> + Clone {
+    // A delimiter is a comma or slash
+    let delimiter = tok_comma().or(tok_slash()).to(());
+
+    // Cost item: either a real component or a delimiter (to be skipped)
+    let cost_item = choice((tok_cost_component().map(Some), delimiter.to(None)));
+
+    // Parse items and filter out the None values (delimiters)
+    cost_item
+        .repeated()
+        .collect::<Vec<_>>()
+        .map(|items| items.into_iter().flatten().collect())
+}
+
+/// Parse a cost specification: { ... }, {{ ... }}, or {# ... }.
+fn tok_cost_spec<'src>(
+) -> impl Parser<'src, &'src [SpannedToken<'src>], CostSpec, TokExtra<'src>> + Clone {
+    choice((
+        // Total cost: {{ ... }} (legacy syntax)
+        tok_ldoublebrace()
+            .ignore_then(tok_cost_components())
+            .then_ignore(tok_rdoublebrace())
+            .map(|comps| build_tok_cost_spec(comps, true)),
+        // Total cost: {# ... } (new syntax)
+        tok_lbracehash()
+            .ignore_then(tok_cost_components())
+            .then_ignore(tok_rbrace())
+            .map(|comps| build_tok_cost_spec(comps, true)),
+        // Per-unit cost: { ... }
+        tok_lbrace()
+            .ignore_then(tok_cost_components())
+            .then_ignore(tok_rbrace())
+            .map(|comps| build_tok_cost_spec(comps, false)),
+    ))
+}
+
+/// Parse a price annotation: @ [amount] or @@ [amount].
+/// Amount can be missing for incomplete inputs.
 fn tok_price_annotation<'src>(
 ) -> impl Parser<'src, &'src [SpannedToken<'src>], PriceAnnotation, TokExtra<'src>> + Clone {
+    // Complete amount: expr + currency (use tok_expr() for arithmetic)
+    let complete_amount = tok_expr()
+        .then(tok_currency())
+        .map(|(n, c)| Amount::new(n, c));
+
+    // Incomplete amount: expr only or currency only
+    let incomplete_amount = choice((
+        tok_expr().map(IncompleteAmount::NumberOnly),
+        tok_currency().map(|c| IncompleteAmount::CurrencyOnly(c.into())),
+    ));
+
+    // Price amount: complete, incomplete, or empty
+    let _price_amount = choice((
+        complete_amount.clone().map(Some),
+        incomplete_amount.clone().map(Some),
+    ));
+
     choice((
+        // @@ with complete amount
         tok_atat()
-            .ignore_then(tok_amount())
+            .ignore_then(complete_amount.clone())
             .map(PriceAnnotation::Total),
+        // @@ with incomplete amount
+        tok_atat()
+            .ignore_then(incomplete_amount.clone())
+            .map(PriceAnnotation::TotalIncomplete),
+        // @@ with nothing (empty)
+        tok_atat().to(PriceAnnotation::TotalEmpty),
+        // @ with complete amount
         tok_at()
-            .ignore_then(tok_amount())
+            .ignore_then(complete_amount)
             .map(PriceAnnotation::Unit),
+        // @ with incomplete amount
+        tok_at()
+            .ignore_then(incomplete_amount)
+            .map(PriceAnnotation::UnitIncomplete),
+        // @ with nothing (empty)
+        tok_at().to(PriceAnnotation::UnitEmpty),
     ))
 }
 
@@ -539,7 +690,8 @@ fn tok_meta_value<'src>(
         tok_link().map(|s| MetaValue::Link(s.to_string())),
         tok_date().map(MetaValue::Date),
         tok_amount().map(MetaValue::Amount),
-        tok_number().map(MetaValue::Number),
+        // Use tok_expr() to allow arithmetic expressions in metadata values
+        tok_expr().map(MetaValue::Number),
         tok_currency().map(|s| MetaValue::Currency(s.to_string())),
     ))
 }
@@ -648,7 +800,66 @@ enum PostingOrMeta {
     TagsLinks(Vec<String>, Vec<String>),
 }
 
-/// Parse a posting line.
+/// Parse posting-level metadata (4+ spaces indent).
+fn tok_posting_meta<'src>(
+) -> impl Parser<'src, &'src [SpannedToken<'src>], (String, MetaValue), TokExtra<'src>> + Clone {
+    tok_newline()
+        .ignore_then(tok_deep_indent())
+        .ignore_then(tok_meta_key())
+        .then(tok_meta_value().or_not())
+        .then_ignore(tok_comment().or_not())
+        .map(|(key, value)| (key.to_string(), value.unwrap_or(MetaValue::None)))
+}
+
+/// Parse a posting line with its metadata.
+fn tok_posting_with_meta<'src>(
+) -> impl Parser<'src, &'src [SpannedToken<'src>], Posting, TokExtra<'src>> + Clone {
+    // Optional flag
+    let flag = tok_flag().or_not();
+
+    // Account is required
+    let account = tok_account();
+
+    // Amount is optional
+    let amount = tok_incomplete_amount().or_not();
+
+    // Cost spec is optional
+    let cost = tok_cost_spec().or_not();
+
+    // Price annotation is optional
+    let price = tok_price_annotation().or_not();
+
+    flag.then(account)
+        .then(amount)
+        .then(cost)
+        .then(price)
+        .then_ignore(tok_comment().or_not())
+        .then(tok_posting_meta().repeated().collect::<Vec<_>>())
+        .map(|(((((flag, account), amount), cost), price), metadata)| {
+            // Create posting based on whether we have an amount
+            let mut posting = if let Some(a) = amount {
+                Posting::with_incomplete(account, a)
+            } else {
+                Posting::auto(account)
+            };
+            if let Some(f) = flag {
+                posting = posting.with_flag(f);
+            }
+            if let Some(c) = cost {
+                posting = posting.with_cost(c);
+            }
+            if let Some(p) = price {
+                posting = posting.with_price(p);
+            }
+            // Add posting-level metadata
+            for (key, value) in metadata {
+                posting.meta.insert(key, value);
+            }
+            posting
+        })
+}
+
+/// Parse a posting line (without consuming metadata, for use in `tok_posting_or_meta`).
 fn tok_posting<'src>(
 ) -> impl Parser<'src, &'src [SpannedToken<'src>], Posting, TokExtra<'src>> + Clone {
     // Optional flag
@@ -691,15 +902,35 @@ fn tok_posting<'src>(
         })
 }
 
-/// Parse a metadata line inside a directive.
-fn tok_meta_line<'src>(
-) -> impl Parser<'src, &'src [SpannedToken<'src>], (String, MetaValue), TokExtra<'src>> + Clone {
-    tok_newline()
+/// Parse a metadata line inside a directive, returning None for comment-only lines.
+fn tok_meta_or_comment<'src>(
+) -> impl Parser<'src, &'src [SpannedToken<'src>], Option<(String, MetaValue)>, TokExtra<'src>> + Clone
+{
+    // Actual metadata line
+    let meta_line = tok_newline()
         .ignore_then(tok_indent())
         .ignore_then(tok_meta_key())
         .then(tok_meta_value().or_not())
         .then_ignore(tok_comment().or_not())
-        .map(|(key, value)| (key.to_string(), value.unwrap_or(MetaValue::None)))
+        .map(|(key, value)| Some((key.to_string(), value.unwrap_or(MetaValue::None))));
+
+    // Comment-only line (skip it)
+    let comment_line = tok_newline()
+        .ignore_then(tok_indent())
+        .ignore_then(tok_comment())
+        .to(None);
+
+    choice((meta_line, comment_line))
+}
+
+/// Parse metadata lines, filtering out comment-only lines.
+fn tok_meta_lines<'src>(
+) -> impl Parser<'src, &'src [SpannedToken<'src>], Vec<(String, MetaValue)>, TokExtra<'src>> + Clone
+{
+    tok_meta_or_comment()
+        .repeated()
+        .collect::<Vec<_>>()
+        .map(|items| items.into_iter().flatten().collect())
 }
 
 /// Parse posting or metadata inside a transaction.
@@ -742,15 +973,25 @@ fn tok_posting_or_meta<'src>(
 
     let posting_line = tok_newline()
         .ignore_then(tok_indent())
-        .ignore_then(tok_posting())
+        .ignore_then(tok_posting_with_meta())
         .map(|p| Some(PostingOrMeta::Posting(p)));
 
+    // Comment with indentation (within posting block)
     let comment_line = tok_newline()
         .ignore_then(tok_indent())
         .ignore_then(tok_comment())
         .to(None);
 
-    choice((meta_entry, tags_links_line, posting_line, comment_line))
+    // Comment without indentation (at column 0) - still allowed within transaction
+    let unindented_comment = tok_newline().ignore_then(tok_comment()).to(None);
+
+    choice((
+        meta_entry,
+        tags_links_line,
+        posting_line,
+        comment_line,
+        unindented_comment,
+    ))
 }
 
 /// Parse a transaction directive.
@@ -821,25 +1062,37 @@ fn tok_transaction_directive<'src>(
 }
 
 /// Parse a balance directive.
+/// Format: DATE balance ACCOUNT NUMBER [~ TOLERANCE] CURRENCY [COST]
 fn tok_balance_directive<'src>(
 ) -> impl Parser<'src, &'src [SpannedToken<'src>], (NaiveDate, Directive), TokExtra<'src>> {
+    // Amount with optional tolerance: EXPR [~ TOLERANCE] CURRENCY
+    // e.g., "200 USD", "200 ~ 0.002 USD", "(1 + 5) / 2.1 USD"
+    let tolerance = tok_tilde().ignore_then(tok_expr());
+
+    let amount_with_tolerance = tok_expr()
+        .then(tolerance.or_not())
+        .then(tok_currency())
+        .map(|((num, tol), curr)| (Amount::new(num, curr), tol));
+
     tok_date()
         .then_ignore(tok_balance())
         .then(tok_account())
-        .then(tok_amount())
-        .then(tok_tilde().ignore_then(tok_number()).or_not())
+        .then(amount_with_tolerance)
+        .then(tok_cost_spec().or_not()) // Optional cost spec for balance with cost
         .then_ignore(tok_comment().or_not())
-        .then(tok_meta_line().repeated().collect::<Vec<_>>())
-        .map(|((((date, account), amount), tolerance), meta)| {
-            let mut bal = Balance::new(date, account, amount);
-            if let Some(t) = tolerance {
-                bal = bal.with_tolerance(t);
-            }
-            for (k, v) in meta {
-                bal.meta.insert(k, v);
-            }
-            (date, Directive::Balance(bal))
-        })
+        .then(tok_meta_lines())
+        .map(
+            |((((date, account), (amount, tolerance)), _cost), meta)| {
+                let mut bal = Balance::new(date, account, amount);
+                if let Some(t) = tolerance {
+                    bal = bal.with_tolerance(t);
+                }
+                for (k, v) in meta {
+                    bal.meta.insert(k, v);
+                }
+                (date, Directive::Balance(bal))
+            },
+        )
 }
 
 /// Parse an open directive.
@@ -851,7 +1104,7 @@ fn tok_open_directive<'src>(
         .then(tok_currency().separated_by(tok_comma()).collect::<Vec<_>>())
         .then(tok_string().or_not())
         .then_ignore(tok_comment().or_not())
-        .then(tok_meta_line().repeated().collect::<Vec<_>>())
+        .then(tok_meta_lines())
         .map(|((((date, account), currencies), booking), meta)| {
             let currencies: Vec<InternedStr> = currencies.into_iter().map(Into::into).collect();
             let mut open = Open::new(date, account).with_currencies(currencies);
@@ -872,7 +1125,7 @@ fn tok_close_directive<'src>(
         .then_ignore(tok_close())
         .then(tok_account())
         .then_ignore(tok_comment().or_not())
-        .then(tok_meta_line().repeated().collect::<Vec<_>>())
+        .then(tok_meta_lines())
         .map(|((date, account), meta)| {
             let mut close = Close::new(date, account);
             for (k, v) in meta {
@@ -889,7 +1142,7 @@ fn tok_commodity_directive<'src>(
         .then_ignore(tok_commodity())
         .then(tok_currency())
         .then_ignore(tok_comment().or_not())
-        .then(tok_meta_line().repeated().collect::<Vec<_>>())
+        .then(tok_meta_lines())
         .map(|((date, currency), meta)| {
             let mut commodity = Commodity::new(date, currency);
             for (k, v) in meta {
@@ -907,7 +1160,7 @@ fn tok_pad_directive<'src>(
         .then(tok_account())
         .then(tok_account())
         .then_ignore(tok_comment().or_not())
-        .then(tok_meta_line().repeated().collect::<Vec<_>>())
+        .then(tok_meta_lines())
         .map(|(((date, account), source), meta)| {
             let mut pad = Pad::new(date, account, source);
             for (k, v) in meta {
@@ -925,7 +1178,7 @@ fn tok_event_directive<'src>(
         .then(tok_string())
         .then(tok_string())
         .then_ignore(tok_comment().or_not())
-        .then(tok_meta_line().repeated().collect::<Vec<_>>())
+        .then(tok_meta_lines())
         .map(|(((date, name), value), meta)| {
             let mut event = Event::new(date, &name, &value);
             for (k, v) in meta {
@@ -943,7 +1196,7 @@ fn tok_query_directive<'src>(
         .then(tok_string())
         .then(tok_string())
         .then_ignore(tok_comment().or_not())
-        .then(tok_meta_line().repeated().collect::<Vec<_>>())
+        .then(tok_meta_lines())
         .map(|(((date, name), query_string), meta)| {
             let mut query = Query::new(date, &name, &query_string);
             for (k, v) in meta {
@@ -961,7 +1214,7 @@ fn tok_note_directive<'src>(
         .then(tok_account())
         .then(tok_string())
         .then_ignore(tok_comment().or_not())
-        .then(tok_meta_line().repeated().collect::<Vec<_>>())
+        .then(tok_meta_lines())
         .map(|(((date, account), comment), meta)| {
             let mut note = Note::new(date, account, &comment);
             for (k, v) in meta {
@@ -971,17 +1224,36 @@ fn tok_note_directive<'src>(
         })
 }
 
-/// Parse a document directive.
+/// Parse a document directive (with optional tags and links).
 fn tok_document_directive<'src>(
 ) -> impl Parser<'src, &'src [SpannedToken<'src>], (NaiveDate, Directive), TokExtra<'src>> {
+    // Tags and links after the path
+    let tag_or_link = choice((
+        tok_tag().map(|t| (Some(t.to_string()), None)),
+        tok_link().map(|l| (None, Some(l.to_string()))),
+    ));
+
     tok_date()
         .then_ignore(tok_document())
         .then(tok_account())
         .then(tok_string())
+        .then(tag_or_link.repeated().collect::<Vec<_>>())
         .then_ignore(tok_comment().or_not())
-        .then(tok_meta_line().repeated().collect::<Vec<_>>())
-        .map(|(((date, account), path), meta)| {
+        .then(tok_meta_lines())
+        .map(|((((date, account), path), tags_links), meta)| {
+            let mut tags = Vec::new();
+            let mut links = Vec::new();
+            for (t, l) in tags_links {
+                if let Some(tag) = t {
+                    tags.push(tag);
+                }
+                if let Some(link) = l {
+                    links.push(link);
+                }
+            }
             let mut document = Document::new(date, account, &path);
+            document.tags = tags.into_iter().map(InternedStr::from).collect();
+            document.links = links.into_iter().map(InternedStr::from).collect();
             for (k, v) in meta {
                 document.meta.insert(k, v);
             }
@@ -997,7 +1269,7 @@ fn tok_price_directive<'src>(
         .then(tok_currency())
         .then(tok_amount())
         .then_ignore(tok_comment().or_not())
-        .then(tok_meta_line().repeated().collect::<Vec<_>>())
+        .then(tok_meta_lines())
         .map(|(((date, currency), amount), meta)| {
             let mut price = Price::new(date, currency, amount);
             for (k, v) in meta {
@@ -1015,7 +1287,7 @@ fn tok_custom_directive<'src>(
         .then(tok_string())
         .then(tok_meta_value().repeated().collect::<Vec<_>>())
         .then_ignore(tok_comment().or_not())
-        .then(tok_meta_line().repeated().collect::<Vec<_>>())
+        .then(tok_meta_lines())
         .map(|(((date, name), values), meta)| {
             let mut custom = Custom::new(date, &name);
             for v in values {
@@ -1048,6 +1320,39 @@ fn tok_dated_directive<'src>(
     .map(|(_, directive)| ParsedItem::Directive(directive))
 }
 
+/// Match a shebang line (e.g., #!/usr/bin/env bean-web).
+fn tok_shebang<'src>() -> impl Parser<'src, &'src [SpannedToken<'src>], (), TokExtra<'src>> + Clone
+{
+    any()
+        .filter(|t: &SpannedToken<'_>| matches!(t.token, Token::Shebang(_)))
+        .to(())
+}
+
+/// Match an Emacs directive (e.g., #+STARTUP: showall).
+fn tok_emacs_directive<'src>(
+) -> impl Parser<'src, &'src [SpannedToken<'src>], (), TokExtra<'src>> + Clone {
+    any()
+        .filter(|t: &SpannedToken<'_>| matches!(t.token, Token::EmacsDirective(_)))
+        .to(())
+}
+
+/// Match an org-mode style header line (e.g., "* Options", "** Section").
+/// These are lines starting with one or more `*` at the beginning of a line,
+/// used for organization but ignored by beancount.
+fn tok_org_header_line<'src>(
+) -> impl Parser<'src, &'src [SpannedToken<'src>], (), TokExtra<'src>> + Clone {
+    // Match one or more Star tokens followed by any non-newline tokens until newline
+    tok_star()
+        .repeated()
+        .at_least(1)
+        .then(
+            any()
+                .filter(|t: &SpannedToken<'_>| !matches!(t.token, Token::Newline))
+                .repeated(),
+        )
+        .to(())
+}
+
 /// Parse a single entry (directive, special directive, or comment).
 fn tok_entry<'src>() -> impl Parser<'src, &'src [SpannedToken<'src>], ParsedItem, TokExtra<'src>> {
     choice((
@@ -1060,19 +1365,46 @@ fn tok_entry<'src>() -> impl Parser<'src, &'src [SpannedToken<'src>], ParsedItem
         tok_popmeta_directive(),
         tok_dated_directive(),
         tok_comment().to(ParsedItem::Comment),
+        // Skip shebang, Emacs directives, and org-mode headers as comment-like entries
+        tok_shebang().to(ParsedItem::Comment),
+        tok_emacs_directive().to(ParsedItem::Comment),
+        tok_org_header_line().to(ParsedItem::Comment),
     ))
 }
 
-/// Parse a complete file.
+/// Skip tokens until we reach a newline (for error recovery).
+/// Consumes at least one token to make progress.
+fn tok_skip_to_newline<'src>() -> impl Parser<'src, &'src [SpannedToken<'src>], (), TokExtra<'src>>
+{
+    // Must consume at least one token to make progress
+    any()
+        .then(
+            any()
+                .filter(|t: &SpannedToken<'_>| !matches!(t.token, Token::Newline))
+                .repeated(),
+        )
+        .then(tok_newline().or_not())
+        .to(())
+}
+
+/// Parse a complete file with error recovery.
 fn tok_file_parser<'src>(
 ) -> impl Parser<'src, &'src [SpannedToken<'src>], Vec<(ParsedItem, usize, usize)>, TokExtra<'src>>
 {
-    tok_entry()
-        .map_with(|item, e| (item, e.span().start, e.span().end))
-        .separated_by(tok_newline().repeated().at_least(1))
-        .allow_leading()
-        .allow_trailing()
-        .collect()
+    // Skip leading newlines
+    tok_newline().repeated().ignore_then(
+        // Try to parse an entry, or skip a bad line on failure
+        tok_entry()
+            .map_with(|item, e| Some((item, e.span().start, e.span().end)))
+            .recover_with(via_parser(
+                // On error, skip to the next newline and emit None
+                tok_skip_to_newline().to(None),
+            ))
+            .then_ignore(tok_newline().repeated())
+            .repeated()
+            .collect::<Vec<_>>()
+            .map(|items| items.into_iter().flatten().collect()),
+    )
 }
 
 // ============================================================================
@@ -1353,8 +1685,8 @@ mod tests {
     }
 
     #[test]
-    fn test_parser_equivalence() {
-        // Test that token parser produces equivalent results to character parser
+    fn test_parse_complete_ledger() {
+        // Test parsing a complete ledger with multiple directive types
         let source = r#"
 option "title" "Test Ledger"
 
@@ -1367,28 +1699,14 @@ option "title" "Test Ledger"
 
 2024-01-15 balance Assets:Bank 1000.00 USD
 "#;
-        let token_result = parse(source);
-        let char_result = crate::parse(source);
+        let result = parse(source);
 
-        assert_eq!(
-            token_result.directives.len(),
-            char_result.directives.len(),
-            "Directive count mismatch"
-        );
-        assert_eq!(
-            token_result.options.len(),
-            char_result.options.len(),
-            "Options count mismatch"
-        );
+        assert_eq!(result.directives.len(), 4, "Expected 4 directives");
+        assert_eq!(result.options.len(), 1, "Expected 1 option");
         assert!(
-            token_result.errors.is_empty(),
-            "Token parser errors: {:?}",
-            token_result.errors
-        );
-        assert!(
-            char_result.errors.is_empty(),
-            "Char parser errors: {:?}",
-            char_result.errors
+            result.errors.is_empty(),
+            "Parser errors: {:?}",
+            result.errors
         );
     }
 }

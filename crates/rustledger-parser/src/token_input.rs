@@ -216,7 +216,7 @@ mod tests {
         // Should have: Txn, Newline, Indent, Account, Number, Currency
         assert!(tokens.iter().any(|t| matches!(t.token, Token::Txn)));
         assert!(tokens.iter().any(|t| matches!(t.token, Token::Newline)));
-        assert!(tokens.iter().any(|t| matches!(t.token, Token::Indent)));
+        assert!(tokens.iter().any(|t| matches!(t.token, Token::Indent(_))));
         assert!(tokens.iter().any(|t| matches!(t.token, Token::Account(_))));
         assert!(tokens.iter().any(|t| matches!(t.token, Token::Number(_))));
         assert!(tokens.iter().any(|t| matches!(t.token, Token::Currency(_))));
