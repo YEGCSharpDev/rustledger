@@ -174,11 +174,11 @@ fn run(file: &PathBuf, report: &Report, verbose: bool, format: &OutputFormat) ->
         .load(file)
         .with_context(|| format!("failed to load {}", file.display()))?;
 
-    // Extract directives
+    // Extract directives (move, not clone)
     let mut directives: Vec<_> = load_result
         .directives
-        .iter()
-        .map(|s| s.value.clone())
+        .into_iter()
+        .map(|s| s.value)
         .collect();
 
     // Interpolate transactions
