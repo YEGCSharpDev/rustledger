@@ -170,14 +170,29 @@ impl std::error::Error for BookingError {}
 /// inv.add(Position::with_cost(Amount::new(dec!(10), "AAPL"), cost));
 /// assert_eq!(inv.units("AAPL"), dec!(10));
 /// ```
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "rkyv",
     derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)
 )]
 pub struct Inventory {
     positions: Vec<Position>,
+    /// Index for O(1) lookup of simple positions (no cost) by currency.
+    /// Maps currency to position index in the `positions` Vec.
+    /// Not serialized - rebuilt on demand.
+    #[serde(skip)]
+    #[cfg_attr(feature = "rkyv", rkyv(with = rkyv::with::Skip))]
+    simple_index: HashMap<InternedStr, usize>,
 }
+
+impl PartialEq for Inventory {
+    fn eq(&self, other: &Self) -> bool {
+        // Only compare positions, not the index (which is derived data)
+        self.positions == other.positions
+    }
+}
+
+impl Eq for Inventory {}
 
 impl Inventory {
     /// Create an empty inventory.
@@ -261,23 +276,27 @@ impl Inventory {
     ///
     /// For positions with cost, this creates a new lot.
     /// For positions without cost, this merges with existing positions
-    /// of the same currency.
+    /// of the same currency using O(1) `HashMap` lookup.
     pub fn add(&mut self, position: Position) {
         if position.is_empty() {
             return;
         }
 
-        // For positions without cost, try to merge
+        // For positions without cost, use index for O(1) lookup
         if position.cost.is_none() {
-            for existing in &mut self.positions {
-                if existing.cost.is_none() && existing.units.currency == position.units.currency {
-                    existing.units += &position.units;
-                    return;
-                }
+            if let Some(&idx) = self.simple_index.get(&position.units.currency) {
+                // Merge with existing position
+                debug_assert!(self.positions[idx].cost.is_none());
+                self.positions[idx].units += &position.units;
+                return;
             }
+            // No existing position - add new one and index it
+            let idx = self.positions.len();
+            self.simple_index
+                .insert(position.units.currency.clone(), idx);
         }
 
-        // Otherwise, add as new lot
+        // Add as new lot (either with cost, or first simple position for this currency)
         self.positions.push(position);
     }
 
@@ -523,6 +542,7 @@ impl Inventory {
 
         // Clean up empty positions
         self.positions.retain(|p| !p.is_empty());
+        self.rebuild_index();
 
         Ok(BookingResult {
             matched,
@@ -617,6 +637,7 @@ impl Inventory {
 
         // Clean up empty positions
         self.positions.retain(|p| !p.is_empty());
+        self.rebuild_index();
 
         Ok(BookingResult {
             matched,
@@ -682,6 +703,9 @@ impl Inventory {
                 units.currency.clone(),
             )));
         }
+
+        // Rebuild index after modifications
+        self.rebuild_index();
 
         Ok(BookingResult {
             matched,
@@ -765,6 +789,23 @@ impl Inventory {
     /// Remove all empty positions.
     pub fn compact(&mut self) {
         self.positions.retain(|p| !p.is_empty());
+        self.rebuild_index();
+    }
+
+    /// Rebuild the `simple_index` from positions.
+    /// Called after operations that may invalidate the index (like retain).
+    fn rebuild_index(&mut self) {
+        self.simple_index.clear();
+        for (idx, pos) in self.positions.iter().enumerate() {
+            if pos.cost.is_none() {
+                debug_assert!(
+                    !self.simple_index.contains_key(&pos.units.currency),
+                    "Invariant violated: multiple simple positions for currency {}",
+                    pos.units.currency
+                );
+                self.simple_index.insert(pos.units.currency.clone(), idx);
+            }
+        }
     }
 
     /// Merge this inventory with another.

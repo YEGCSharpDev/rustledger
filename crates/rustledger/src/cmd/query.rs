@@ -133,11 +133,11 @@ fn run(args: &Args) -> Result<()> {
         anyhow::bail!("file has parse errors");
     }
 
-    // Get directives
+    // Get directives (move, not clone)
     let directives: Vec<_> = load_result
         .directives
-        .iter()
-        .map(|s| s.value.clone())
+        .into_iter()
+        .map(|s| s.value)
         .collect();
 
     if args.verbose {

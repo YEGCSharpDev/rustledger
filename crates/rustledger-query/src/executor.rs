@@ -3,7 +3,8 @@
 //! Executes parsed BQL queries against a set of Beancount directives.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 
 use chrono::Datelike;
 use regex::Regex;
@@ -42,6 +43,77 @@ pub enum Value {
     StringSet(Vec<String>),
     /// NULL value.
     Null,
+}
+
+impl Value {
+    /// Compute a hash for this value.
+    ///
+    /// Note: This is not the standard Hash trait because some contained types
+    /// (Decimal, Inventory) don't implement Hash. We use byte representations
+    /// for those types.
+    fn hash_value<H: Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Self::String(s) => s.hash(state),
+            Self::Number(d) => d.serialize().hash(state),
+            Self::Integer(i) => i.hash(state),
+            Self::Date(d) => {
+                d.year().hash(state);
+                d.month().hash(state);
+                d.day().hash(state);
+            }
+            Self::Boolean(b) => b.hash(state),
+            Self::Amount(a) => {
+                a.number.serialize().hash(state);
+                a.currency.as_str().hash(state);
+            }
+            Self::Position(p) => {
+                p.units.number.serialize().hash(state);
+                p.units.currency.as_str().hash(state);
+                if let Some(cost) = &p.cost {
+                    cost.number.serialize().hash(state);
+                    cost.currency.as_str().hash(state);
+                }
+            }
+            Self::Inventory(inv) => {
+                for pos in inv.positions() {
+                    pos.units.number.serialize().hash(state);
+                    pos.units.currency.as_str().hash(state);
+                    if let Some(cost) = &pos.cost {
+                        cost.number.serialize().hash(state);
+                        cost.currency.as_str().hash(state);
+                    }
+                }
+            }
+            Self::StringSet(ss) => {
+                // Hash StringSet in a canonical, order-independent way by sorting first.
+                let mut sorted = ss.clone();
+                sorted.sort();
+                for s in &sorted {
+                    s.hash(state);
+                }
+            }
+            Self::Null => {}
+        }
+    }
+}
+
+/// Compute a hash for a row (for DISTINCT deduplication).
+fn hash_row(row: &Row) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    let mut hasher = DefaultHasher::new();
+    for value in row {
+        value.hash_value(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Compute a hash for a single value (for PIVOT lookups).
+fn hash_single_value(value: &Value) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    let mut hasher = DefaultHasher::new();
+    value.hash_value(&mut hasher);
+    hasher.finish()
 }
 
 /// A row of query results.
@@ -233,6 +305,13 @@ impl<'a> Executor<'a> {
             };
 
             // Simple query - one row per posting
+            // Use HashSet for O(1) DISTINCT deduplication instead of O(n) contains()
+            let mut seen_hashes: HashSet<u64> = if query.distinct {
+                HashSet::with_capacity(postings.len())
+            } else {
+                HashSet::new()
+            };
+
             for (i, ctx) in postings.iter().enumerate() {
                 let row = if let Some(ref wctxs) = window_contexts {
                     self.evaluate_row_with_window(&query.targets, ctx, Some(&wctxs[i]))?
@@ -240,8 +319,9 @@ impl<'a> Executor<'a> {
                     self.evaluate_row(&query.targets, ctx)?
                 };
                 if query.distinct {
-                    // Check for duplicates
-                    if !result.rows.contains(&row) {
+                    // O(1) hash-based deduplication
+                    let row_hash = hash_row(&row);
+                    if seen_hashes.insert(row_hash) {
                         result.add_row(row);
                     }
                 } else {
@@ -290,6 +370,13 @@ impl<'a> Executor<'a> {
             self.resolve_subquery_column_names(&outer_query.targets, &inner_result.columns)?;
         let mut result = QueryResult::new(outer_column_names);
 
+        // Use HashSet for O(1) DISTINCT deduplication
+        let mut seen_hashes: HashSet<u64> = if outer_query.distinct {
+            HashSet::with_capacity(inner_result.rows.len())
+        } else {
+            HashSet::new()
+        };
+
         // Process each row from the inner result
         for inner_row in &inner_result.rows {
             // Apply outer WHERE clause if present
@@ -304,7 +391,9 @@ impl<'a> Executor<'a> {
                 self.evaluate_subquery_row(&outer_query.targets, inner_row, &inner_column_map)?;
 
             if outer_query.distinct {
-                if !result.rows.contains(&outer_row) {
+                // O(1) hash-based deduplication
+                let row_hash = hash_row(&outer_row);
+                if seen_hashes.insert(row_hash) {
                     result.add_row(outer_row);
                 }
             } else {
@@ -2805,13 +2894,25 @@ impl<'a> Executor<'a> {
                 .map(|&i| group_rows[0][i].clone())
                 .collect();
 
-            // Add pivot values
+            // Build O(1) pivot value -> row index for this group
+            let pivot_index: HashMap<u64, usize> = group_rows
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, row)| {
+                    row.get(pivot_col_idx).map(|v| (hash_single_value(v), idx))
+                })
+                .collect();
+
+            // Add pivot values with O(1) lookup
             for pv in &pivot_values {
-                let matching_row = group_rows
-                    .iter()
-                    .find(|row| row.get(pivot_col_idx).is_some_and(|v| v == pv));
-                if let Some(row) = matching_row {
-                    new_row.push(row.get(value_col_idx).cloned().unwrap_or(Value::Null));
+                let pv_hash = hash_single_value(pv);
+                if let Some(&row_idx) = pivot_index.get(&pv_hash) {
+                    new_row.push(
+                        group_rows[row_idx]
+                            .get(value_col_idx)
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                    );
                 } else {
                     new_row.push(Value::Null);
                 }
@@ -3024,5 +3125,110 @@ mod tests {
         assert_eq!(result.len(), 4);
         // First row should be from 2024-01-16 (later date)
         assert_eq!(result.rows[0][0], Value::Date(date(2024, 1, 16)));
+    }
+
+    #[test]
+    fn test_hash_value_all_variants() {
+        use rustledger_core::{Cost, Inventory, Position};
+
+        // Test that all Value variants can be hashed without panic
+        let values = vec![
+            Value::String("test".to_string()),
+            Value::Number(dec!(123.45)),
+            Value::Integer(42),
+            Value::Date(date(2024, 1, 15)),
+            Value::Boolean(true),
+            Value::Boolean(false),
+            Value::Amount(Amount::new(dec!(100), "USD")),
+            Value::Position(Position::simple(Amount::new(dec!(10), "AAPL"))),
+            Value::Position(Position::with_cost(
+                Amount::new(dec!(10), "AAPL"),
+                Cost::new(dec!(150), "USD"),
+            )),
+            Value::Inventory(Inventory::new()),
+            Value::StringSet(vec!["tag1".to_string(), "tag2".to_string()]),
+            Value::Null,
+        ];
+
+        // Hash each value and verify no panic
+        for value in &values {
+            let hash = hash_single_value(value);
+            assert!(hash != 0 || matches!(value, Value::Null));
+        }
+
+        // Test that different values produce different hashes (usually)
+        let hash1 = hash_single_value(&Value::String("a".to_string()));
+        let hash2 = hash_single_value(&Value::String("b".to_string()));
+        assert_ne!(hash1, hash2);
+
+        // Test that same values produce same hashes
+        let hash3 = hash_single_value(&Value::Integer(42));
+        let hash4 = hash_single_value(&Value::Integer(42));
+        assert_eq!(hash3, hash4);
+    }
+
+    #[test]
+    fn test_hash_row_distinct() {
+        // Test hash_row for DISTINCT deduplication
+        let row1 = vec![Value::String("a".to_string()), Value::Integer(1)];
+        let row2 = vec![Value::String("a".to_string()), Value::Integer(1)];
+        let row3 = vec![Value::String("b".to_string()), Value::Integer(1)];
+
+        assert_eq!(hash_row(&row1), hash_row(&row2));
+        assert_ne!(hash_row(&row1), hash_row(&row3));
+    }
+
+    #[test]
+    fn test_string_set_hash_order_independent() {
+        // StringSet hash should be order-independent
+        let set1 = Value::StringSet(vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+        let set2 = Value::StringSet(vec!["c".to_string(), "a".to_string(), "b".to_string()]);
+        let set3 = Value::StringSet(vec!["b".to_string(), "c".to_string(), "a".to_string()]);
+
+        let hash1 = hash_single_value(&set1);
+        let hash2 = hash_single_value(&set2);
+        let hash3 = hash_single_value(&set3);
+
+        assert_eq!(hash1, hash2);
+        assert_eq!(hash2, hash3);
+    }
+
+    #[test]
+    fn test_inventory_hash_includes_cost() {
+        use rustledger_core::{Cost, Inventory, Position};
+
+        // Two inventories with same units but different costs should hash differently
+        let mut inv1 = Inventory::new();
+        inv1.add(Position::with_cost(
+            Amount::new(dec!(10), "AAPL"),
+            Cost::new(dec!(100), "USD"),
+        ));
+
+        let mut inv2 = Inventory::new();
+        inv2.add(Position::with_cost(
+            Amount::new(dec!(10), "AAPL"),
+            Cost::new(dec!(200), "USD"),
+        ));
+
+        let hash1 = hash_single_value(&Value::Inventory(inv1));
+        let hash2 = hash_single_value(&Value::Inventory(inv2));
+
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_distinct_deduplication() {
+        let directives = sample_directives();
+        let mut executor = Executor::new(&directives);
+
+        // Without DISTINCT - should have duplicates (same flag '*' for all)
+        let query = parse("SELECT flag").unwrap();
+        let result = executor.execute(&query).unwrap();
+        assert_eq!(result.len(), 4); // One per posting, all have flag '*'
+
+        // With DISTINCT - should deduplicate
+        let query = parse("SELECT DISTINCT flag").unwrap();
+        let result = executor.execute(&query).unwrap();
+        assert_eq!(result.len(), 1); // Deduplicated to 1 (all '*')
     }
 }

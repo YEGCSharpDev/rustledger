@@ -121,7 +121,7 @@ fn bench_parse_and_validate(c: &mut Criterion) {
                 b.iter(|| {
                     let result = parse(ledger);
                     let directives: Vec<_> =
-                        result.directives.iter().map(|s| s.value.clone()).collect();
+                        result.directives.into_iter().map(|s| s.value).collect();
                     let errors = validate(&directives);
                     black_box((directives, errors))
                 });
@@ -147,9 +147,9 @@ fn bench_full_pipeline(c: &mut Criterion) {
                     // Parse
                     let result = parse(ledger);
 
-                    // Extract directives
+                    // Extract directives (move, not clone)
                     let mut directives: Vec<_> =
-                        result.directives.iter().map(|s| s.value.clone()).collect();
+                        result.directives.into_iter().map(|s| s.value).collect();
 
                     // Interpolate transactions
                     for directive in &mut directives {

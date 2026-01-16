@@ -10,7 +10,7 @@ use rustledger_booking::{interpolate, InterpolationError};
 use rustledger_core::Directive;
 use rustledger_loader::{
     load_cache_entry, reintern_directives, save_cache_entry, CacheEntry, CachedOptions,
-    CachedPlugin, LoadError, Loader,
+    CachedPlugin, LoadError, LoadResult, Loader,
 };
 #[cfg(feature = "python-plugin-wasm")]
 use rustledger_plugin::PluginManager;
@@ -257,12 +257,15 @@ fn run(args: &Args) -> Result<ExitCode> {
         }
     }
 
-    // Extract directives from Spanned wrappers
-    let mut directives: Vec<_> = load_result
-        .directives
-        .iter()
-        .map(|s| s.value.clone())
-        .collect();
+    // Destructure to enable move instead of clone
+    let LoadResult {
+        directives: spanned_directives,
+        options,
+        ..
+    } = load_result;
+
+    // Extract directives (move, not clone)
+    let mut directives: Vec<_> = spanned_directives.into_iter().map(|s| s.value).collect();
 
     // Build list of native plugins to run
     let mut native_plugins_to_run = args.native_plugins.clone();
@@ -287,8 +290,8 @@ fn run(args: &Args) -> Result<ExitCode> {
         let plugin_input = PluginInput {
             directives: wrappers,
             options: PluginOptions {
-                operating_currencies: load_result.options.operating_currency.clone(),
-                title: load_result.options.title.clone(),
+                operating_currencies: options.operating_currency,
+                title: options.title,
             },
             config: None,
         };
