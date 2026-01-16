@@ -3126,4 +3126,109 @@ mod tests {
         // First row should be from 2024-01-16 (later date)
         assert_eq!(result.rows[0][0], Value::Date(date(2024, 1, 16)));
     }
+
+    #[test]
+    fn test_hash_value_all_variants() {
+        use rustledger_core::{Cost, Inventory, Position};
+
+        // Test that all Value variants can be hashed without panic
+        let values = vec![
+            Value::String("test".to_string()),
+            Value::Number(dec!(123.45)),
+            Value::Integer(42),
+            Value::Date(date(2024, 1, 15)),
+            Value::Boolean(true),
+            Value::Boolean(false),
+            Value::Amount(Amount::new(dec!(100), "USD")),
+            Value::Position(Position::simple(Amount::new(dec!(10), "AAPL"))),
+            Value::Position(Position::with_cost(
+                Amount::new(dec!(10), "AAPL"),
+                Cost::new(dec!(150), "USD"),
+            )),
+            Value::Inventory(Inventory::new()),
+            Value::StringSet(vec!["tag1".to_string(), "tag2".to_string()]),
+            Value::Null,
+        ];
+
+        // Hash each value and verify no panic
+        for value in &values {
+            let hash = hash_single_value(value);
+            assert!(hash != 0 || matches!(value, Value::Null));
+        }
+
+        // Test that different values produce different hashes (usually)
+        let hash1 = hash_single_value(&Value::String("a".to_string()));
+        let hash2 = hash_single_value(&Value::String("b".to_string()));
+        assert_ne!(hash1, hash2);
+
+        // Test that same values produce same hashes
+        let hash3 = hash_single_value(&Value::Integer(42));
+        let hash4 = hash_single_value(&Value::Integer(42));
+        assert_eq!(hash3, hash4);
+    }
+
+    #[test]
+    fn test_hash_row_distinct() {
+        // Test hash_row for DISTINCT deduplication
+        let row1 = vec![Value::String("a".to_string()), Value::Integer(1)];
+        let row2 = vec![Value::String("a".to_string()), Value::Integer(1)];
+        let row3 = vec![Value::String("b".to_string()), Value::Integer(1)];
+
+        assert_eq!(hash_row(&row1), hash_row(&row2));
+        assert_ne!(hash_row(&row1), hash_row(&row3));
+    }
+
+    #[test]
+    fn test_string_set_hash_order_independent() {
+        // StringSet hash should be order-independent
+        let set1 = Value::StringSet(vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+        let set2 = Value::StringSet(vec!["c".to_string(), "a".to_string(), "b".to_string()]);
+        let set3 = Value::StringSet(vec!["b".to_string(), "c".to_string(), "a".to_string()]);
+
+        let hash1 = hash_single_value(&set1);
+        let hash2 = hash_single_value(&set2);
+        let hash3 = hash_single_value(&set3);
+
+        assert_eq!(hash1, hash2);
+        assert_eq!(hash2, hash3);
+    }
+
+    #[test]
+    fn test_inventory_hash_includes_cost() {
+        use rustledger_core::{Cost, Inventory, Position};
+
+        // Two inventories with same units but different costs should hash differently
+        let mut inv1 = Inventory::new();
+        inv1.add(Position::with_cost(
+            Amount::new(dec!(10), "AAPL"),
+            Cost::new(dec!(100), "USD"),
+        ));
+
+        let mut inv2 = Inventory::new();
+        inv2.add(Position::with_cost(
+            Amount::new(dec!(10), "AAPL"),
+            Cost::new(dec!(200), "USD"),
+        ));
+
+        let hash1 = hash_single_value(&Value::Inventory(inv1));
+        let hash2 = hash_single_value(&Value::Inventory(inv2));
+
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_distinct_deduplication() {
+        let directives = sample_directives();
+        let mut executor = Executor::new(&directives);
+
+        // Without DISTINCT - should have duplicates (same flag '*' for all)
+        let query = parse("SELECT flag").unwrap();
+        let result = executor.execute(&query).unwrap();
+        assert_eq!(result.len(), 4); // One per posting, all have flag '*'
+
+        // With DISTINCT - should deduplicate
+        let query = parse("SELECT DISTINCT flag").unwrap();
+        let result = executor.execute(&query).unwrap();
+        assert_eq!(result.len(), 1); // Deduplicated to 1 (all '*')
+    }
 }
