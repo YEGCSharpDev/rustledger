@@ -53,15 +53,20 @@ jobs:
           curl -sL https://github.com/simonmichael/hledger/releases/latest/download/hledger-linux-x64.tar.gz | tar xz -C /tmp
           sudo mv /tmp/hledger /usr/local/bin/
 
-          # Hyperfine for accurate benchmarking
-          curl -sL https://github.com/sharkdp/hyperfine/releases/download/v1.18.0/hyperfine-v1.18.0-x86_64-unknown-linux-gnu.tar.gz | tar xz -C /tmp
-          sudo mv /tmp/hyperfine-v1.18.0-x86_64-unknown-linux-gnu/hyperfine /usr/local/bin/
+          # Hyperfine for accurate benchmarking (use latest release)
+          HYPERFINE_VERSION=$(curl -s https://api.github.com/repos/sharkdp/hyperfine/releases/latest | jq -r '.tag_name')
+          curl -sL "https://github.com/sharkdp/hyperfine/releases/download/${HYPERFINE_VERSION}/hyperfine-${HYPERFINE_VERSION}-x86_64-unknown-linux-gnu.tar.gz" | tar xz -C /tmp
+          sudo mv "/tmp/hyperfine-${HYPERFINE_VERSION}-x86_64-unknown-linux-gnu/hyperfine" /usr/local/bin/
 
       - name: Build ledger from source
         run: |
+          # Get latest release tag from GitHub API
+          LEDGER_VERSION=$(curl -s https://api.github.com/repos/ledger/ledger/releases/latest | jq -r '.tag_name')
+          echo "Building ledger ${LEDGER_VERSION}"
+
           cd /tmp
-          curl -sL https://github.com/ledger/ledger/archive/refs/tags/v3.4.1.tar.gz | tar xz
-          cd ledger-3.4.1
+          curl -sL "https://github.com/ledger/ledger/archive/refs/tags/${LEDGER_VERSION}.tar.gz" | tar xz
+          cd "ledger-${LEDGER_VERSION#v}"
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_DOCS=OFF -DBUILD_WEB_DOCS=OFF
           cmake --build build --parallel $(nproc)
           sudo cp build/ledger /usr/local/bin/
