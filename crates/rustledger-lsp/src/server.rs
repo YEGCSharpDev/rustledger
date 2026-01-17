@@ -1,5 +1,6 @@
 //! Main LSP server implementation.
 
+use crate::handlers::execute_command::COMMANDS;
 use crate::handlers::on_type_formatting::{FIRST_TRIGGER_CHARACTER, MORE_TRIGGER_CHARACTERS};
 use crate::handlers::semantic_tokens::get_capabilities as get_semantic_tokens_capabilities;
 use crate::handlers::signature_help::TRIGGER_CHARACTERS as SIGNATURE_TRIGGER_CHARACTERS;
@@ -64,6 +65,7 @@ pub fn start_stdio() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 " ".to_string(),  // After keywords
                 "\"".to_string(), // Strings (payees, narrations)
             ]),
+            resolve_provider: Some(true), // Enable completion resolve for detailed info
             ..Default::default()
         }),
         definition_provider: Some(lsp_types::OneOf::Left(true)),
@@ -113,6 +115,10 @@ pub fn start_stdio() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     .collect(),
             ),
             retrigger_characters: None,
+            work_done_progress_options: Default::default(),
+        }),
+        execute_command_provider: Some(lsp_types::ExecuteCommandOptions {
+            commands: COMMANDS.iter().map(|s| s.to_string()).collect(),
             work_done_progress_options: Default::default(),
         }),
         // Type hierarchy: advertised via experimental until lsp-types adds native support

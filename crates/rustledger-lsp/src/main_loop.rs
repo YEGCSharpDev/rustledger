@@ -11,12 +11,14 @@ use crate::handlers::call_hierarchy::{
 use crate::handlers::code_actions::handle_code_actions;
 use crate::handlers::code_lens::handle_code_lens;
 use crate::handlers::completion::handle_completion;
+use crate::handlers::completion_resolve::handle_completion_resolve;
 use crate::handlers::declaration::handle_goto_declaration;
 use crate::handlers::definition::handle_goto_definition;
 use crate::handlers::diagnostics::parse_errors_to_diagnostics;
 use crate::handlers::document_color::{handle_color_presentation, handle_document_color};
 use crate::handlers::document_highlight::handle_document_highlight;
 use crate::handlers::document_links::handle_document_links;
+use crate::handlers::execute_command::handle_execute_command;
 use crate::handlers::folding::handle_folding_ranges;
 use crate::handlers::formatting::handle_formatting;
 use crate::handlers::hover::handle_hover;
@@ -44,25 +46,25 @@ use lsp_types::notification::{
 use lsp_types::request::{
     CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare,
     CodeActionRequest, CodeLensRequest, ColorPresentationRequest, Completion, DocumentColor,
-    DocumentHighlightRequest, DocumentLinkRequest, DocumentSymbolRequest, FoldingRangeRequest,
-    Formatting, GotoDeclaration, GotoDefinition, HoverRequest, Initialize, InlayHintRequest,
-    LinkedEditingRange, OnTypeFormatting, PrepareRenameRequest, RangeFormatting, References,
-    Rename, Request, SelectionRangeRequest, SemanticTokensFullRequest, Shutdown,
-    SignatureHelpRequest, TypeHierarchyPrepare, TypeHierarchySubtypes, TypeHierarchySupertypes,
-    WorkspaceSymbolRequest,
+    DocumentHighlightRequest, DocumentLinkRequest, DocumentSymbolRequest, ExecuteCommand,
+    FoldingRangeRequest, Formatting, GotoDeclaration, GotoDefinition, HoverRequest, Initialize,
+    InlayHintRequest, LinkedEditingRange, OnTypeFormatting, PrepareRenameRequest, RangeFormatting,
+    References, Rename, Request, ResolveCompletionItem, SelectionRangeRequest,
+    SemanticTokensFullRequest, Shutdown, SignatureHelpRequest, TypeHierarchyPrepare,
+    TypeHierarchySubtypes, TypeHierarchySupertypes, WorkspaceSymbolRequest,
 };
 use lsp_types::{
     CallHierarchyIncomingCallsParams, CallHierarchyOutgoingCallsParams, CallHierarchyPrepareParams,
-    CodeActionParams, CodeLensParams, ColorPresentationParams, CompletionParams, DiagnosticOptions,
-    DiagnosticServerCapabilities, DocumentColorParams, DocumentFormattingParams,
+    CodeActionParams, CodeLensParams, ColorPresentationParams, CompletionItem, CompletionParams,
+    DiagnosticOptions, DiagnosticServerCapabilities, DocumentColorParams, DocumentFormattingParams,
     DocumentHighlightParams, DocumentLinkParams, DocumentOnTypeFormattingParams,
-    DocumentRangeFormattingParams, DocumentSymbolParams, FoldingRangeParams, GotoDefinitionParams,
-    HoverParams, InitializeParams, InitializeResult, InlayHintParams, LinkedEditingRangeParams,
-    PublishDiagnosticsParams, ReferenceParams, RenameParams, SelectionRangeParams,
-    SemanticTokensParams, ServerCapabilities, ServerInfo, SignatureHelpParams,
-    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TypeHierarchyPrepareParams, TypeHierarchySubtypesParams, TypeHierarchySupertypesParams, Uri,
-    WorkspaceSymbolParams,
+    DocumentRangeFormattingParams, DocumentSymbolParams, ExecuteCommandParams, FoldingRangeParams,
+    GotoDefinitionParams, HoverParams, InitializeParams, InitializeResult, InlayHintParams,
+    LinkedEditingRangeParams, PublishDiagnosticsParams, ReferenceParams, RenameParams,
+    SelectionRangeParams, SemanticTokensParams, ServerCapabilities, ServerInfo,
+    SignatureHelpParams, TextDocumentPositionParams, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TypeHierarchyPrepareParams, TypeHierarchySubtypesParams,
+    TypeHierarchySupertypesParams, Uri, WorkspaceSymbolParams,
 };
 use parking_lot::RwLock;
 use rustledger_parser::parse;
@@ -202,6 +204,8 @@ impl MainLoopState {
             CallHierarchyIncomingCalls::METHOD => self.handle_incoming_calls_request(req),
             CallHierarchyOutgoingCalls::METHOD => self.handle_outgoing_calls_request(req),
             SignatureHelpRequest::METHOD => self.handle_signature_help_request(req),
+            ExecuteCommand::METHOD => self.handle_execute_command_request(req),
+            ResolveCompletionItem::METHOD => self.handle_completion_resolve_request(req),
             _ => {
                 tracing::warn!("Unhandled request: {}", req.method);
                 Err(format!("Unhandled request: {}", req.method))
@@ -994,6 +998,75 @@ impl MainLoopState {
         let response = handle_signature_help(&params, &text);
 
         serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the workspace/executeCommand request.
+    fn handle_execute_command_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: ExecuteCommandParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        // Get the first open document from VFS (commands apply to current doc)
+        let (path, text) = {
+            let vfs = self.vfs.read();
+            let first_path = vfs.paths().next().cloned();
+            match first_path {
+                Some(p) => {
+                    let content = vfs.get_content(&p).unwrap_or_default();
+                    (p, content)
+                }
+                None => {
+                    return Ok(serde_json::json!({
+                        "error": "No document open"
+                    }))
+                }
+            }
+        };
+
+        // Convert path to URI
+        #[cfg(not(windows))]
+        let uri: Uri = format!("file://{}", path.display())
+            .parse()
+            .map_err(|e| format!("{:?}", e))?;
+        #[cfg(windows)]
+        let uri: Uri = format!("file:///{}", path.display())
+            .parse()
+            .map_err(|e| format!("{:?}", e))?;
+
+        // Parse the document
+        let parse_result = parse(&text);
+
+        // Handle execute command
+        let response = handle_execute_command(&params, &text, &parse_result, &uri);
+
+        Ok(response.unwrap_or(serde_json::Value::Null))
+    }
+
+    /// Handle the completionItem/resolve request.
+    fn handle_completion_resolve_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let item: CompletionItem = serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        // Get the first open document to resolve against
+        let text = {
+            let vfs = self.vfs.read();
+            let first_path = vfs.paths().next().cloned();
+            first_path
+                .and_then(|path| vfs.get_content(&path))
+                .unwrap_or_default()
+        };
+
+        // Parse the document
+        let parse_result = parse(&text);
+
+        // Handle completion resolve
+        let resolved = handle_completion_resolve(item, &parse_result);
+
+        serde_json::to_value(resolved).map_err(|e| e.to_string())
     }
 
     /// Handle an LSP notification (no response expected).
