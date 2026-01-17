@@ -9,6 +9,7 @@ use crate::handlers::completion::handle_completion;
 use crate::handlers::definition::handle_goto_definition;
 use crate::handlers::diagnostics::parse_errors_to_diagnostics;
 use crate::handlers::hover::handle_hover;
+use crate::handlers::symbols::handle_document_symbols;
 use crate::snapshot::bump_revision;
 use crate::vfs::Vfs;
 use crossbeam_channel::{Receiver, Sender};
@@ -16,11 +17,14 @@ use lsp_types::notification::{
     DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Notification,
     PublishDiagnostics,
 };
-use lsp_types::request::{Completion, GotoDefinition, HoverRequest, Initialize, Request, Shutdown};
+use lsp_types::request::{
+    Completion, DocumentSymbolRequest, GotoDefinition, HoverRequest, Initialize, Request, Shutdown,
+};
 use lsp_types::{
-    CompletionParams, DiagnosticOptions, DiagnosticServerCapabilities, GotoDefinitionParams,
-    HoverParams, InitializeParams, InitializeResult, PublishDiagnosticsParams, ServerCapabilities,
-    ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
+    CompletionParams, DiagnosticOptions, DiagnosticServerCapabilities, DocumentSymbolParams,
+    GotoDefinitionParams, HoverParams, InitializeParams, InitializeResult,
+    PublishDiagnosticsParams, ServerCapabilities, ServerInfo, TextDocumentSyncCapability,
+    TextDocumentSyncKind, Uri,
 };
 use parking_lot::RwLock;
 use rustledger_parser::parse;
@@ -133,6 +137,7 @@ impl MainLoopState {
             Completion::METHOD => self.handle_completion_request(req),
             GotoDefinition::METHOD => self.handle_goto_definition_request(req),
             HoverRequest::METHOD => self.handle_hover_request(req),
+            DocumentSymbolRequest::METHOD => self.handle_document_symbols_request(req),
             _ => {
                 tracing::warn!("Unhandled request: {}", req.method);
                 Err(format!("Unhandled request: {}", req.method))
@@ -244,6 +249,32 @@ impl MainLoopState {
 
         // Handle hover
         let response = handle_hover(&params, &text, &parse_result);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the textDocument/documentSymbol request.
+    fn handle_document_symbols_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: DocumentSymbolParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        let uri = &params.text_document.uri;
+
+        // Get document content from VFS
+        let text = if let Some(path) = uri_to_path(uri) {
+            self.vfs.read().get_content(&path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Parse the document
+        let parse_result = parse(&text);
+
+        // Handle document symbols
+        let response = handle_document_symbols(&params, &text, &parse_result);
 
         serde_json::to_value(response).map_err(|e| e.to_string())
     }
