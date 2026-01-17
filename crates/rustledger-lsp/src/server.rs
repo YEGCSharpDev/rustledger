@@ -63,6 +63,8 @@ pub fn start_stdio() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             ]),
             ..Default::default()
         }),
+        definition_provider: Some(lsp_types::OneOf::Left(true)),
+        hover_provider: Some(lsp_types::HoverProviderCapability::Simple(true)),
         ..Default::default()
     };
 
