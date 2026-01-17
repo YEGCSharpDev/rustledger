@@ -20,6 +20,9 @@ use crate::handlers::rename::{handle_prepare_rename, handle_rename};
 use crate::handlers::selection_range::handle_selection_range;
 use crate::handlers::semantic_tokens::handle_semantic_tokens;
 use crate::handlers::symbols::handle_document_symbols;
+use crate::handlers::type_hierarchy::{
+    handle_prepare_type_hierarchy, handle_subtypes, handle_supertypes,
+};
 use crate::handlers::workspace_symbols::handle_workspace_symbols;
 use crate::snapshot::bump_revision;
 use crate::vfs::Vfs;
@@ -32,7 +35,8 @@ use lsp_types::request::{
     CodeActionRequest, Completion, DocumentLinkRequest, DocumentSymbolRequest, FoldingRangeRequest,
     Formatting, GotoDefinition, HoverRequest, Initialize, InlayHintRequest, PrepareRenameRequest,
     RangeFormatting, References, Rename, Request, SelectionRangeRequest, SemanticTokensFullRequest,
-    Shutdown, WorkspaceSymbolRequest,
+    Shutdown, TypeHierarchyPrepare, TypeHierarchySubtypes, TypeHierarchySupertypes,
+    WorkspaceSymbolRequest,
 };
 use lsp_types::{
     CodeActionParams, CompletionParams, DiagnosticOptions, DiagnosticServerCapabilities,
@@ -40,7 +44,8 @@ use lsp_types::{
     DocumentSymbolParams, FoldingRangeParams, GotoDefinitionParams, HoverParams, InitializeParams,
     InitializeResult, InlayHintParams, PublishDiagnosticsParams, ReferenceParams, RenameParams,
     SelectionRangeParams, SemanticTokensParams, ServerCapabilities, ServerInfo,
-    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
+    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TypeHierarchyPrepareParams, TypeHierarchySubtypesParams, TypeHierarchySupertypesParams, Uri,
     WorkspaceSymbolParams,
 };
 use parking_lot::RwLock;
@@ -167,6 +172,9 @@ impl MainLoopState {
             InlayHintRequest::METHOD => self.handle_inlay_hint_request(req),
             SelectionRangeRequest::METHOD => self.handle_selection_range_request(req),
             FoldingRangeRequest::METHOD => self.handle_folding_range_request(req),
+            TypeHierarchyPrepare::METHOD => self.handle_prepare_type_hierarchy_request(req),
+            TypeHierarchySupertypes::METHOD => self.handle_type_hierarchy_supertypes_request(req),
+            TypeHierarchySubtypes::METHOD => self.handle_type_hierarchy_subtypes_request(req),
             _ => {
                 tracing::warn!("Unhandled request: {}", req.method);
                 Err(format!("Unhandled request: {}", req.method))
@@ -611,6 +619,84 @@ impl MainLoopState {
 
         // Handle selection range
         let response = handle_selection_range(&params, &text, &parse_result);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the textDocument/prepareTypeHierarchy request.
+    fn handle_prepare_type_hierarchy_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: TypeHierarchyPrepareParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        let uri = &params.text_document_position_params.text_document.uri;
+
+        // Get document content from VFS
+        let text = if let Some(path) = uri_to_path(uri) {
+            self.vfs.read().get_content(&path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Parse the document
+        let parse_result = parse(&text);
+
+        // Handle prepare type hierarchy
+        let response = handle_prepare_type_hierarchy(&params, &text, &parse_result, uri);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the typeHierarchy/supertypes request.
+    fn handle_type_hierarchy_supertypes_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: TypeHierarchySupertypesParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        let uri = &params.item.uri;
+
+        // Get document content from VFS
+        let text = if let Some(path) = uri_to_path(uri) {
+            self.vfs.read().get_content(&path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Parse the document
+        let parse_result = parse(&text);
+
+        // Handle supertypes
+        let response = handle_supertypes(&params, &text, &parse_result, uri);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the typeHierarchy/subtypes request.
+    fn handle_type_hierarchy_subtypes_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: TypeHierarchySubtypesParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        let uri = &params.item.uri;
+
+        // Get document content from VFS
+        let text = if let Some(path) = uri_to_path(uri) {
+            self.vfs.read().get_content(&path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Parse the document
+        let parse_result = parse(&text);
+
+        // Handle subtypes
+        let response = handle_subtypes(&params, &text, &parse_result, uri);
 
         serde_json::to_value(response).map_err(|e| e.to_string())
     }

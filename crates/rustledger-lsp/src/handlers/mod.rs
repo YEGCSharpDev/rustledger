@@ -18,4 +18,5 @@ pub mod rename;
 pub mod selection_range;
 pub mod semantic_tokens;
 pub mod symbols;
+pub mod type_hierarchy;
 pub mod workspace_symbols;

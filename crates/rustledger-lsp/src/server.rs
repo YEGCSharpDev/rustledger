@@ -84,6 +84,10 @@ pub fn start_stdio() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         inlay_hint_provider: Some(lsp_types::OneOf::Left(true)),
         selection_range_provider: Some(lsp_types::SelectionRangeProviderCapability::Simple(true)),
         folding_range_provider: Some(lsp_types::FoldingRangeProviderCapability::Simple(true)),
+        // Type hierarchy: advertised via experimental until lsp-types adds native support
+        experimental: Some(serde_json::json!({
+            "typeHierarchyProvider": true
+        })),
         ..Default::default()
     };
 
