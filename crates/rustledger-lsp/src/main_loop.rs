@@ -5,6 +5,7 @@
 //! - Requests dispatched to threadpool with immutable snapshots
 //! - Revision counter enables cancellation of stale requests
 
+use crate::handlers::completion::handle_completion;
 use crate::handlers::diagnostics::parse_errors_to_diagnostics;
 use crate::snapshot::bump_revision;
 use crate::vfs::Vfs;
@@ -13,11 +14,11 @@ use lsp_types::notification::{
     DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Notification,
     PublishDiagnostics,
 };
-use lsp_types::request::{Initialize, Request, Shutdown};
+use lsp_types::request::{Completion, Initialize, Request, Shutdown};
 use lsp_types::{
-    DiagnosticOptions, DiagnosticServerCapabilities, InitializeParams, InitializeResult,
-    PublishDiagnosticsParams, ServerCapabilities, ServerInfo, TextDocumentSyncCapability,
-    TextDocumentSyncKind, Uri,
+    CompletionParams, DiagnosticOptions, DiagnosticServerCapabilities, InitializeParams,
+    InitializeResult, PublishDiagnosticsParams, ServerCapabilities, ServerInfo,
+    TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
 };
 use parking_lot::RwLock;
 use rustledger_parser::parse;
@@ -127,6 +128,7 @@ impl MainLoopState {
                 self.shutdown_requested = true;
                 Ok(serde_json::Value::Null)
             }
+            Completion::METHOD => self.handle_completion_request(req),
             _ => {
                 tracing::warn!("Unhandled request: {}", req.method);
                 Err(format!("Unhandled request: {}", req.method))
@@ -166,6 +168,32 @@ impl MainLoopState {
         };
 
         serde_json::to_value(result).map_err(|e| e.to_string())
+    }
+
+    /// Handle the textDocument/completion request.
+    fn handle_completion_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: CompletionParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        let uri = &params.text_document_position.text_document.uri;
+
+        // Get document content from VFS
+        let text = if let Some(path) = uri_to_path(uri) {
+            self.vfs.read().get_content(&path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Parse the document
+        let parse_result = parse(&text);
+
+        // Handle completion
+        let response = handle_completion(&params, &text, &parse_result);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
     }
 
     /// Handle an LSP notification (no response expected).

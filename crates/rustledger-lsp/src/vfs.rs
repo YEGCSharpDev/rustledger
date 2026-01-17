@@ -59,6 +59,11 @@ impl Vfs {
         self.documents.get(path)
     }
 
+    /// Get document content as a string.
+    pub fn get_content(&self, path: &PathBuf) -> Option<String> {
+        self.documents.get(path).map(|d| d.text())
+    }
+
     /// Update a document's content.
     pub fn update(&mut self, path: &PathBuf, content: String, version: i32) {
         if let Some(doc) = self.documents.get_mut(path) {

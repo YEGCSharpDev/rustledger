@@ -2956,6 +2956,7 @@ dependencies = [
 name = "rustledger-lsp"
 version = "0.3.0"
 dependencies = [
+ "chrono",
  "crossbeam-channel",
  "lsp-server",
  "lsp-types",

@@ -55,6 +55,14 @@ pub fn start_stdio() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         text_document_sync: Some(lsp_types::TextDocumentSyncCapability::Kind(
             lsp_types::TextDocumentSyncKind::FULL,
         )),
+        completion_provider: Some(lsp_types::CompletionOptions {
+            trigger_characters: Some(vec![
+                ":".to_string(),  // Account segments
+                " ".to_string(),  // After keywords
+                "\"".to_string(), // Strings (payees, narrations)
+            ]),
+            ..Default::default()
+        }),
         ..Default::default()
     };
 
