@@ -5,6 +5,7 @@
 //! - Requests dispatched to threadpool with immutable snapshots
 //! - Revision counter enables cancellation of stale requests
 
+use crate::handlers::code_actions::handle_code_actions;
 use crate::handlers::completion::handle_completion;
 use crate::handlers::definition::handle_goto_definition;
 use crate::handlers::diagnostics::parse_errors_to_diagnostics;
@@ -19,12 +20,12 @@ use lsp_types::notification::{
     PublishDiagnostics,
 };
 use lsp_types::request::{
-    Completion, DocumentSymbolRequest, GotoDefinition, HoverRequest, Initialize, Request,
-    SemanticTokensFullRequest, Shutdown,
+    CodeActionRequest, Completion, DocumentSymbolRequest, GotoDefinition, HoverRequest, Initialize,
+    Request, SemanticTokensFullRequest, Shutdown,
 };
 use lsp_types::{
-    CompletionParams, DiagnosticOptions, DiagnosticServerCapabilities, DocumentSymbolParams,
-    GotoDefinitionParams, HoverParams, InitializeParams, InitializeResult,
+    CodeActionParams, CompletionParams, DiagnosticOptions, DiagnosticServerCapabilities,
+    DocumentSymbolParams, GotoDefinitionParams, HoverParams, InitializeParams, InitializeResult,
     PublishDiagnosticsParams, SemanticTokensParams, ServerCapabilities, ServerInfo,
     TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
 };
@@ -141,6 +142,7 @@ impl MainLoopState {
             HoverRequest::METHOD => self.handle_hover_request(req),
             DocumentSymbolRequest::METHOD => self.handle_document_symbols_request(req),
             SemanticTokensFullRequest::METHOD => self.handle_semantic_tokens_request(req),
+            CodeActionRequest::METHOD => self.handle_code_action_request(req),
             _ => {
                 tracing::warn!("Unhandled request: {}", req.method);
                 Err(format!("Unhandled request: {}", req.method))
@@ -304,6 +306,32 @@ impl MainLoopState {
 
         // Handle semantic tokens
         let response = handle_semantic_tokens(&params, &text, &parse_result);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the textDocument/codeAction request.
+    fn handle_code_action_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: CodeActionParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        let uri = &params.text_document.uri;
+
+        // Get document content from VFS
+        let text = if let Some(path) = uri_to_path(uri) {
+            self.vfs.read().get_content(&path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Parse the document
+        let parse_result = parse(&text);
+
+        // Handle code actions
+        let response = handle_code_actions(&params, &text, &parse_result);
 
         serde_json::to_value(response).map_err(|e| e.to_string())
     }
