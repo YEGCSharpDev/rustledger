@@ -5,6 +5,9 @@
 //! - Requests dispatched to threadpool with immutable snapshots
 //! - Revision counter enables cancellation of stale requests
 
+use crate::handlers::call_hierarchy::{
+    handle_incoming_calls, handle_outgoing_calls, handle_prepare_call_hierarchy,
+};
 use crate::handlers::code_actions::handle_code_actions;
 use crate::handlers::code_lens::handle_code_lens;
 use crate::handlers::completion::handle_completion;
@@ -25,6 +28,7 @@ use crate::handlers::references::handle_references;
 use crate::handlers::rename::{handle_prepare_rename, handle_rename};
 use crate::handlers::selection_range::handle_selection_range;
 use crate::handlers::semantic_tokens::handle_semantic_tokens;
+use crate::handlers::signature_help::handle_signature_help;
 use crate::handlers::symbols::handle_document_symbols;
 use crate::handlers::type_hierarchy::{
     handle_prepare_type_hierarchy, handle_subtypes, handle_supertypes,
@@ -38,23 +42,27 @@ use lsp_types::notification::{
     PublishDiagnostics,
 };
 use lsp_types::request::{
+    CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare,
     CodeActionRequest, CodeLensRequest, ColorPresentationRequest, Completion, DocumentColor,
     DocumentHighlightRequest, DocumentLinkRequest, DocumentSymbolRequest, FoldingRangeRequest,
     Formatting, GotoDeclaration, GotoDefinition, HoverRequest, Initialize, InlayHintRequest,
     LinkedEditingRange, OnTypeFormatting, PrepareRenameRequest, RangeFormatting, References,
     Rename, Request, SelectionRangeRequest, SemanticTokensFullRequest, Shutdown,
-    TypeHierarchyPrepare, TypeHierarchySubtypes, TypeHierarchySupertypes, WorkspaceSymbolRequest,
+    SignatureHelpRequest, TypeHierarchyPrepare, TypeHierarchySubtypes, TypeHierarchySupertypes,
+    WorkspaceSymbolRequest,
 };
 use lsp_types::{
+    CallHierarchyIncomingCallsParams, CallHierarchyOutgoingCallsParams, CallHierarchyPrepareParams,
     CodeActionParams, CodeLensParams, ColorPresentationParams, CompletionParams, DiagnosticOptions,
     DiagnosticServerCapabilities, DocumentColorParams, DocumentFormattingParams,
     DocumentHighlightParams, DocumentLinkParams, DocumentOnTypeFormattingParams,
     DocumentRangeFormattingParams, DocumentSymbolParams, FoldingRangeParams, GotoDefinitionParams,
     HoverParams, InitializeParams, InitializeResult, InlayHintParams, LinkedEditingRangeParams,
     PublishDiagnosticsParams, ReferenceParams, RenameParams, SelectionRangeParams,
-    SemanticTokensParams, ServerCapabilities, ServerInfo, TextDocumentPositionParams,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TypeHierarchyPrepareParams,
-    TypeHierarchySubtypesParams, TypeHierarchySupertypesParams, Uri, WorkspaceSymbolParams,
+    SemanticTokensParams, ServerCapabilities, ServerInfo, SignatureHelpParams,
+    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
+    TypeHierarchyPrepareParams, TypeHierarchySubtypesParams, TypeHierarchySupertypesParams, Uri,
+    WorkspaceSymbolParams,
 };
 use parking_lot::RwLock;
 use rustledger_parser::parse;
@@ -190,6 +198,10 @@ impl MainLoopState {
             DocumentColor::METHOD => self.handle_document_color_request(req),
             ColorPresentationRequest::METHOD => self.handle_color_presentation_request(req),
             GotoDeclaration::METHOD => self.handle_goto_declaration_request(req),
+            CallHierarchyPrepare::METHOD => self.handle_prepare_call_hierarchy_request(req),
+            CallHierarchyIncomingCalls::METHOD => self.handle_incoming_calls_request(req),
+            CallHierarchyOutgoingCalls::METHOD => self.handle_outgoing_calls_request(req),
+            SignatureHelpRequest::METHOD => self.handle_signature_help_request(req),
             _ => {
                 tracing::warn!("Unhandled request: {}", req.method);
                 Err(format!("Unhandled request: {}", req.method))
@@ -879,6 +891,107 @@ impl MainLoopState {
 
         // Handle go-to-declaration (same as definition for Beancount)
         let response = handle_goto_declaration(&params, &text, &parse_result, uri);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the textDocument/prepareCallHierarchy request.
+    fn handle_prepare_call_hierarchy_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: CallHierarchyPrepareParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        let uri = &params.text_document_position_params.text_document.uri;
+
+        // Get document content from VFS
+        let text = if let Some(path) = uri_to_path(uri) {
+            self.vfs.read().get_content(&path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Parse the document
+        let parse_result = parse(&text);
+
+        // Handle prepare call hierarchy
+        let response = handle_prepare_call_hierarchy(&params, &text, &parse_result, uri);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the callHierarchy/incomingCalls request.
+    fn handle_incoming_calls_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: CallHierarchyIncomingCallsParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        let uri = &params.item.uri;
+
+        // Get document content from VFS
+        let text = if let Some(path) = uri_to_path(uri) {
+            self.vfs.read().get_content(&path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Parse the document
+        let parse_result = parse(&text);
+
+        // Handle incoming calls
+        let response = handle_incoming_calls(&params, &text, &parse_result, uri);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the callHierarchy/outgoingCalls request.
+    fn handle_outgoing_calls_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: CallHierarchyOutgoingCallsParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        let uri = &params.item.uri;
+
+        // Get document content from VFS
+        let text = if let Some(path) = uri_to_path(uri) {
+            self.vfs.read().get_content(&path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Parse the document
+        let parse_result = parse(&text);
+
+        // Handle outgoing calls
+        let response = handle_outgoing_calls(&params, &text, &parse_result, uri);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the textDocument/signatureHelp request.
+    fn handle_signature_help_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: SignatureHelpParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        let uri = &params.text_document_position_params.text_document.uri;
+
+        // Get document content from VFS
+        let text = if let Some(path) = uri_to_path(uri) {
+            self.vfs.read().get_content(&path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Handle signature help (doesn't need parse result)
+        let response = handle_signature_help(&params, &text);
 
         serde_json::to_value(response).map_err(|e| e.to_string())
     }

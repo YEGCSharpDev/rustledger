@@ -2,6 +2,7 @@
 
 use crate::handlers::on_type_formatting::{FIRST_TRIGGER_CHARACTER, MORE_TRIGGER_CHARACTERS};
 use crate::handlers::semantic_tokens::get_capabilities as get_semantic_tokens_capabilities;
+use crate::handlers::signature_help::TRIGGER_CHARACTERS as SIGNATURE_TRIGGER_CHARACTERS;
 use crate::main_loop::run_main_loop;
 use lsp_server::Connection;
 use lsp_types::InitializeParams;
@@ -103,6 +104,17 @@ pub fn start_stdio() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }),
         color_provider: Some(lsp_types::ColorProviderCapability::Simple(true)),
         declaration_provider: Some(lsp_types::DeclarationCapability::Simple(true)),
+        call_hierarchy_provider: Some(lsp_types::CallHierarchyServerCapability::Simple(true)),
+        signature_help_provider: Some(lsp_types::SignatureHelpOptions {
+            trigger_characters: Some(
+                SIGNATURE_TRIGGER_CHARACTERS
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            ),
+            retrigger_characters: None,
+            work_done_progress_options: Default::default(),
+        }),
         // Type hierarchy: advertised via experimental until lsp-types adds native support
         experimental: Some(serde_json::json!({
             "typeHierarchyProvider": true
