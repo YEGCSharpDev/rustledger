@@ -98,6 +98,11 @@ pub fn start_stdio() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     .collect(),
             ),
         }),
+        code_lens_provider: Some(lsp_types::CodeLensOptions {
+            resolve_provider: Some(false),
+        }),
+        color_provider: Some(lsp_types::ColorProviderCapability::Simple(true)),
+        declaration_provider: Some(lsp_types::DeclarationCapability::Simple(true)),
         // Type hierarchy: advertised via experimental until lsp-types adds native support
         experimental: Some(serde_json::json!({
             "typeHierarchyProvider": true

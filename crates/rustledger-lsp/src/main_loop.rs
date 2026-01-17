@@ -6,9 +6,12 @@
 //! - Revision counter enables cancellation of stale requests
 
 use crate::handlers::code_actions::handle_code_actions;
+use crate::handlers::code_lens::handle_code_lens;
 use crate::handlers::completion::handle_completion;
+use crate::handlers::declaration::handle_goto_declaration;
 use crate::handlers::definition::handle_goto_definition;
 use crate::handlers::diagnostics::parse_errors_to_diagnostics;
+use crate::handlers::document_color::{handle_color_presentation, handle_document_color};
 use crate::handlers::document_highlight::handle_document_highlight;
 use crate::handlers::document_links::handle_document_links;
 use crate::handlers::folding::handle_folding_ranges;
@@ -35,23 +38,23 @@ use lsp_types::notification::{
     PublishDiagnostics,
 };
 use lsp_types::request::{
-    CodeActionRequest, Completion, DocumentHighlightRequest, DocumentLinkRequest,
-    DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest,
-    Initialize, InlayHintRequest, LinkedEditingRange, OnTypeFormatting, PrepareRenameRequest,
-    RangeFormatting, References, Rename, Request, SelectionRangeRequest, SemanticTokensFullRequest,
-    Shutdown, TypeHierarchyPrepare, TypeHierarchySubtypes, TypeHierarchySupertypes,
-    WorkspaceSymbolRequest,
+    CodeActionRequest, CodeLensRequest, ColorPresentationRequest, Completion, DocumentColor,
+    DocumentHighlightRequest, DocumentLinkRequest, DocumentSymbolRequest, FoldingRangeRequest,
+    Formatting, GotoDeclaration, GotoDefinition, HoverRequest, Initialize, InlayHintRequest,
+    LinkedEditingRange, OnTypeFormatting, PrepareRenameRequest, RangeFormatting, References,
+    Rename, Request, SelectionRangeRequest, SemanticTokensFullRequest, Shutdown,
+    TypeHierarchyPrepare, TypeHierarchySubtypes, TypeHierarchySupertypes, WorkspaceSymbolRequest,
 };
 use lsp_types::{
-    CodeActionParams, CompletionParams, DiagnosticOptions, DiagnosticServerCapabilities,
-    DocumentFormattingParams, DocumentHighlightParams, DocumentLinkParams,
-    DocumentOnTypeFormattingParams, DocumentRangeFormattingParams, DocumentSymbolParams,
-    FoldingRangeParams, GotoDefinitionParams, HoverParams, InitializeParams, InitializeResult,
-    InlayHintParams, LinkedEditingRangeParams, PublishDiagnosticsParams, ReferenceParams,
-    RenameParams, SelectionRangeParams, SemanticTokensParams, ServerCapabilities, ServerInfo,
-    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TypeHierarchyPrepareParams, TypeHierarchySubtypesParams, TypeHierarchySupertypesParams, Uri,
-    WorkspaceSymbolParams,
+    CodeActionParams, CodeLensParams, ColorPresentationParams, CompletionParams, DiagnosticOptions,
+    DiagnosticServerCapabilities, DocumentColorParams, DocumentFormattingParams,
+    DocumentHighlightParams, DocumentLinkParams, DocumentOnTypeFormattingParams,
+    DocumentRangeFormattingParams, DocumentSymbolParams, FoldingRangeParams, GotoDefinitionParams,
+    HoverParams, InitializeParams, InitializeResult, InlayHintParams, LinkedEditingRangeParams,
+    PublishDiagnosticsParams, ReferenceParams, RenameParams, SelectionRangeParams,
+    SemanticTokensParams, ServerCapabilities, ServerInfo, TextDocumentPositionParams,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TypeHierarchyPrepareParams,
+    TypeHierarchySubtypesParams, TypeHierarchySupertypesParams, Uri, WorkspaceSymbolParams,
 };
 use parking_lot::RwLock;
 use rustledger_parser::parse;
@@ -183,6 +186,10 @@ impl MainLoopState {
             DocumentHighlightRequest::METHOD => self.handle_document_highlight_request(req),
             LinkedEditingRange::METHOD => self.handle_linked_editing_range_request(req),
             OnTypeFormatting::METHOD => self.handle_on_type_formatting_request(req),
+            CodeLensRequest::METHOD => self.handle_code_lens_request(req),
+            DocumentColor::METHOD => self.handle_document_color_request(req),
+            ColorPresentationRequest::METHOD => self.handle_color_presentation_request(req),
+            GotoDeclaration::METHOD => self.handle_goto_declaration_request(req),
             _ => {
                 tracing::warn!("Unhandled request: {}", req.method);
                 Err(format!("Unhandled request: {}", req.method))
@@ -780,6 +787,98 @@ impl MainLoopState {
 
         // Handle on-type formatting (doesn't need parse result)
         let response = handle_on_type_formatting(&params, &text);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the textDocument/codeLens request.
+    fn handle_code_lens_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: CodeLensParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        let uri = &params.text_document.uri;
+
+        // Get document content from VFS
+        let text = if let Some(path) = uri_to_path(uri) {
+            self.vfs.read().get_content(&path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Parse the document
+        let parse_result = parse(&text);
+
+        // Handle code lens
+        let response = handle_code_lens(&params, &text, &parse_result);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the textDocument/documentColor request.
+    fn handle_document_color_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: DocumentColorParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        let uri = &params.text_document.uri;
+
+        // Get document content from VFS
+        let text = if let Some(path) = uri_to_path(uri) {
+            self.vfs.read().get_content(&path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Parse the document
+        let parse_result = parse(&text);
+
+        // Handle document color
+        let response = handle_document_color(&params, &text, &parse_result);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the textDocument/colorPresentation request.
+    fn handle_color_presentation_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: ColorPresentationParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        // Handle color presentation
+        let response = handle_color_presentation(&params);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the textDocument/declaration request.
+    fn handle_goto_declaration_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: GotoDefinitionParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        let uri = &params.text_document_position_params.text_document.uri;
+
+        // Get document content from VFS
+        let text = if let Some(path) = uri_to_path(uri) {
+            self.vfs.read().get_content(&path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Parse the document
+        let parse_result = parse(&text);
+
+        // Handle go-to-declaration (same as definition for Beancount)
+        let response = handle_goto_declaration(&params, &text, &parse_result, uri);
 
         serde_json::to_value(response).map_err(|e| e.to_string())
     }
