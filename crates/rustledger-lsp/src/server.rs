@@ -1,5 +1,6 @@
 //! Main LSP server implementation.
 
+use crate::handlers::semantic_tokens::get_capabilities as get_semantic_tokens_capabilities;
 use crate::main_loop::run_main_loop;
 use lsp_server::Connection;
 use lsp_types::InitializeParams;
@@ -66,6 +67,7 @@ pub fn start_stdio() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         definition_provider: Some(lsp_types::OneOf::Left(true)),
         hover_provider: Some(lsp_types::HoverProviderCapability::Simple(true)),
         document_symbol_provider: Some(lsp_types::OneOf::Left(true)),
+        semantic_tokens_provider: Some(get_semantic_tokens_capabilities()),
         ..Default::default()
     };
 
