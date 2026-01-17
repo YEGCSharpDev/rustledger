@@ -9,9 +9,13 @@ use crate::handlers::code_actions::handle_code_actions;
 use crate::handlers::completion::handle_completion;
 use crate::handlers::definition::handle_goto_definition;
 use crate::handlers::diagnostics::parse_errors_to_diagnostics;
+use crate::handlers::folding::handle_folding_ranges;
+use crate::handlers::formatting::handle_formatting;
 use crate::handlers::hover::handle_hover;
+use crate::handlers::rename::{handle_prepare_rename, handle_rename};
 use crate::handlers::semantic_tokens::handle_semantic_tokens;
 use crate::handlers::symbols::handle_document_symbols;
+use crate::handlers::workspace_symbols::handle_workspace_symbols;
 use crate::snapshot::bump_revision;
 use crate::vfs::Vfs;
 use crossbeam_channel::{Receiver, Sender};
@@ -20,14 +24,16 @@ use lsp_types::notification::{
     PublishDiagnostics,
 };
 use lsp_types::request::{
-    CodeActionRequest, Completion, DocumentSymbolRequest, GotoDefinition, HoverRequest, Initialize,
-    Request, SemanticTokensFullRequest, Shutdown,
+    CodeActionRequest, Completion, DocumentSymbolRequest, FoldingRangeRequest, Formatting,
+    GotoDefinition, HoverRequest, Initialize, PrepareRenameRequest, Rename, Request,
+    SemanticTokensFullRequest, Shutdown, WorkspaceSymbolRequest,
 };
 use lsp_types::{
     CodeActionParams, CompletionParams, DiagnosticOptions, DiagnosticServerCapabilities,
-    DocumentSymbolParams, GotoDefinitionParams, HoverParams, InitializeParams, InitializeResult,
-    PublishDiagnosticsParams, SemanticTokensParams, ServerCapabilities, ServerInfo,
-    TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
+    DocumentFormattingParams, DocumentSymbolParams, FoldingRangeParams, GotoDefinitionParams,
+    HoverParams, InitializeParams, InitializeResult, PublishDiagnosticsParams, RenameParams,
+    SemanticTokensParams, ServerCapabilities, ServerInfo, TextDocumentPositionParams,
+    TextDocumentSyncCapability, TextDocumentSyncKind, Uri, WorkspaceSymbolParams,
 };
 use parking_lot::RwLock;
 use rustledger_parser::parse;
@@ -143,6 +149,11 @@ impl MainLoopState {
             DocumentSymbolRequest::METHOD => self.handle_document_symbols_request(req),
             SemanticTokensFullRequest::METHOD => self.handle_semantic_tokens_request(req),
             CodeActionRequest::METHOD => self.handle_code_action_request(req),
+            WorkspaceSymbolRequest::METHOD => self.handle_workspace_symbol_request(req),
+            PrepareRenameRequest::METHOD => self.handle_prepare_rename_request(req),
+            Rename::METHOD => self.handle_rename_request(req),
+            Formatting::METHOD => self.handle_formatting_request(req),
+            FoldingRangeRequest::METHOD => self.handle_folding_range_request(req),
             _ => {
                 tracing::warn!("Unhandled request: {}", req.method);
                 Err(format!("Unhandled request: {}", req.method))
@@ -332,6 +343,131 @@ impl MainLoopState {
 
         // Handle code actions
         let response = handle_code_actions(&params, &text, &parse_result);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the workspace/symbol request.
+    fn handle_workspace_symbol_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: WorkspaceSymbolParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        // Collect all open documents
+        let vfs = self.vfs.read();
+        let mut documents = Vec::new();
+
+        for (path, content) in vfs.iter() {
+            let uri_str = format!("file://{}", path.display());
+            if let Ok(uri) = uri_str.parse() {
+                let parse_result = parse(&content);
+                documents.push((uri, content, parse_result));
+            }
+        }
+
+        let response = handle_workspace_symbols(&params, &documents);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the textDocument/prepareRename request.
+    fn handle_prepare_rename_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: TextDocumentPositionParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        let uri = &params.text_document.uri;
+
+        // Get document content from VFS
+        let text = if let Some(path) = uri_to_path(uri) {
+            self.vfs.read().get_content(&path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Parse the document
+        let parse_result = parse(&text);
+
+        // Handle prepare rename
+        let response = handle_prepare_rename(&params, &text, &parse_result);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the textDocument/rename request.
+    fn handle_rename_request(&self, req: lsp_server::Request) -> Result<serde_json::Value, String> {
+        let params: RenameParams = serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        let uri = &params.text_document_position.text_document.uri;
+
+        // Get document content from VFS
+        let text = if let Some(path) = uri_to_path(uri) {
+            self.vfs.read().get_content(&path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Parse the document
+        let parse_result = parse(&text);
+
+        // Handle rename
+        let response = handle_rename(&params, &text, &parse_result);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the textDocument/formatting request.
+    fn handle_formatting_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: DocumentFormattingParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        let uri = &params.text_document.uri;
+
+        // Get document content from VFS
+        let text = if let Some(path) = uri_to_path(uri) {
+            self.vfs.read().get_content(&path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Parse the document
+        let parse_result = parse(&text);
+
+        // Handle formatting
+        let response = handle_formatting(&params, &text, &parse_result);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the textDocument/foldingRange request.
+    fn handle_folding_range_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: FoldingRangeParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        let uri = &params.text_document.uri;
+
+        // Get document content from VFS
+        let text = if let Some(path) = uri_to_path(uri) {
+            self.vfs.read().get_content(&path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Parse the document
+        let parse_result = parse(&text);
+
+        // Handle folding ranges
+        let response = handle_folding_ranges(&params, &text, &parse_result);
 
         serde_json::to_value(response).map_err(|e| e.to_string())
     }

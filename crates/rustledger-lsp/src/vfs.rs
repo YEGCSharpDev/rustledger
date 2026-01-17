@@ -76,6 +76,11 @@ impl Vfs {
     pub fn paths(&self) -> impl Iterator<Item = &PathBuf> {
         self.documents.keys()
     }
+
+    /// Iterate over all open documents (path and content).
+    pub fn iter(&self) -> impl Iterator<Item = (&PathBuf, String)> {
+        self.documents.iter().map(|(path, doc)| (path, doc.text()))
+    }
 }
 
 #[cfg(test)]

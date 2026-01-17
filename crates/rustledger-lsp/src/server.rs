@@ -69,6 +69,13 @@ pub fn start_stdio() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         document_symbol_provider: Some(lsp_types::OneOf::Left(true)),
         semantic_tokens_provider: Some(get_semantic_tokens_capabilities()),
         code_action_provider: Some(lsp_types::CodeActionProviderCapability::Simple(true)),
+        workspace_symbol_provider: Some(lsp_types::OneOf::Left(true)),
+        rename_provider: Some(lsp_types::OneOf::Right(lsp_types::RenameOptions {
+            prepare_provider: Some(true),
+            work_done_progress_options: Default::default(),
+        })),
+        document_formatting_provider: Some(lsp_types::OneOf::Left(true)),
+        folding_range_provider: Some(lsp_types::FoldingRangeProviderCapability::Simple(true)),
         ..Default::default()
     };
 
