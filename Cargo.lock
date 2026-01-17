@@ -3049,6 +3049,7 @@ dependencies = [
 name = "rustledger-wasm"
 version = "0.3.0"
 dependencies = [
+ "chrono",
  "console_error_panic_hook",
  "js-sys",
  "rustledger-booking",

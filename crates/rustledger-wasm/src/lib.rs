@@ -34,6 +34,7 @@
 #![warn(missing_docs)]
 
 mod convert;
+mod editor;
 pub mod types;
 mod utils;
 
@@ -227,6 +228,60 @@ export interface CompletionResult {
     context: string;
 }
 
+// =============================================================================
+// Editor Integration Types (LSP-like features)
+// =============================================================================
+
+/** The kind of a completion item. */
+export type EditorCompletionKind = 'keyword' | 'account' | 'accountsegment' | 'currency' | 'payee' | 'date' | 'text';
+
+/** A completion item for Beancount source editing. */
+export interface EditorCompletion {
+    label: string;
+    kind: EditorCompletionKind;
+    detail?: string;
+    insertText?: string;
+}
+
+/** Result of an editor completion request. */
+export interface EditorCompletionResult {
+    completions: EditorCompletion[];
+    context: string;
+}
+
+/** A range in the document. */
+export interface EditorRange {
+    start_line: number;
+    start_character: number;
+    end_line: number;
+    end_character: number;
+}
+
+/** Hover information for a symbol. */
+export interface EditorHoverInfo {
+    contents: string;
+    range?: EditorRange;
+}
+
+/** A location in the document. */
+export interface EditorLocation {
+    line: number;
+    character: number;
+}
+
+/** The kind of a symbol. */
+export type SymbolKind = 'transaction' | 'account' | 'balance' | 'commodity' | 'posting' | 'pad' | 'event' | 'note' | 'document' | 'price' | 'query' | 'custom';
+
+/** A document symbol for the outline view. */
+export interface EditorDocumentSymbol {
+    name: string;
+    detail?: string;
+    kind: SymbolKind;
+    range: EditorRange;
+    children?: EditorDocumentSymbol[];
+    deprecated?: boolean;
+}
+
 /**
  * A parsed and validated ledger that caches the parse result.
  * Use this class when you need to perform multiple operations on the same
@@ -271,6 +326,22 @@ export class ParsedLedger {
 
     /** Run a native plugin on this ledger. */
     runPlugin(pluginName: string): PluginResult;
+
+    // =========================================================================
+    // Editor Integration (LSP-like features)
+    // =========================================================================
+
+    /** Get completions at the given position. */
+    getCompletions(line: number, character: number): EditorCompletionResult;
+
+    /** Get hover information at the given position. */
+    getHoverInfo(line: number, character: number): EditorHoverInfo | null;
+
+    /** Get the definition location for the symbol at the given position. */
+    getDefinition(line: number, character: number): EditorLocation | null;
+
+    /** Get all document symbols for the outline view. */
+    getDocumentSymbols(): EditorDocumentSymbol[];
 }
 "#;
 
@@ -752,9 +823,17 @@ pub fn bql_completions(partial_query: &str, cursor_pos: usize) -> Result<JsValue
 /// ```
 #[wasm_bindgen]
 pub struct ParsedLedger {
+    /// The original source text.
+    source: String,
+    /// The raw parse result (for editor features).
+    parse_result: ParserResult,
+    /// The interpolated directives.
     directives: Vec<Directive>,
+    /// Ledger options.
     options: LedgerOptions,
+    /// Parse errors.
     parse_errors: Vec<Error>,
+    /// Validation errors.
     validation_errors: Vec<Error>,
 }
 
@@ -769,6 +848,8 @@ impl ParsedLedger {
         let validation_errors = run_validation(&load);
 
         Self {
+            source: source.to_string(),
+            parse_result: load.parse_result,
             directives: load.directives,
             options: load.options,
             parse_errors: load.errors,
@@ -1003,6 +1084,46 @@ impl ParsedLedger {
                 })
                 .collect(),
         };
+        to_js(&result)
+    }
+
+    // =========================================================================
+    // Editor Integration (LSP-like features)
+    // =========================================================================
+
+    /// Get completions at the given position.
+    ///
+    /// Returns context-aware completions for accounts, currencies, directives, etc.
+    #[wasm_bindgen(js_name = "getCompletions")]
+    pub fn get_completions(&self, line: u32, character: u32) -> Result<JsValue, JsError> {
+        let result = editor::get_completions(&self.source, line, character, &self.parse_result);
+        to_js(&result)
+    }
+
+    /// Get hover information at the given position.
+    ///
+    /// Returns documentation for accounts, currencies, and directive keywords.
+    #[wasm_bindgen(js_name = "getHoverInfo")]
+    pub fn get_hover_info(&self, line: u32, character: u32) -> Result<JsValue, JsError> {
+        let result = editor::get_hover_info(&self.source, line, character, &self.parse_result);
+        to_js(&result)
+    }
+
+    /// Get the definition location for the symbol at the given position.
+    ///
+    /// Returns the location of the `open` or `commodity` directive for accounts/currencies.
+    #[wasm_bindgen(js_name = "getDefinition")]
+    pub fn get_definition(&self, line: u32, character: u32) -> Result<JsValue, JsError> {
+        let result = editor::get_definition(&self.source, line, character, &self.parse_result);
+        to_js(&result)
+    }
+
+    /// Get all document symbols for the outline view.
+    ///
+    /// Returns a hierarchical list of all directives with their positions.
+    #[wasm_bindgen(js_name = "getDocumentSymbols")]
+    pub fn get_document_symbols(&self) -> Result<JsValue, JsError> {
+        let result = editor::get_document_symbols(&self.source, &self.parse_result);
         to_js(&result)
     }
 }
