@@ -88,7 +88,7 @@ The release takes ~30-45 minutes to build all platforms.
 | Docker | `ghcr.io/rustledger/rustledger` |
 | Homebrew | `rustledger/homebrew-rustledger` |
 | Scoop | `rustledger/scoop-rustledger` |
-| COPR | `copr.fedorainfracloud.org/rustledger` |
+| COPR | `copr.fedoraproject.org/rustledger` |
 
 ## Troubleshooting
 
@@ -123,7 +123,7 @@ cargo install cargo-release
 shared-version = true       # All crates share same version
 tag-prefix = "v"            # Tags: v0.3.0
 publish = false             # CI handles crates.io
-push = true                 # Push after tagging
+push = true                 # Default; we override with --no-push for protected branches
 allow-branch = ["main"]     # Only release from main
 ```
 
