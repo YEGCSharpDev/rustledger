@@ -9,11 +9,14 @@ use crate::handlers::code_actions::handle_code_actions;
 use crate::handlers::completion::handle_completion;
 use crate::handlers::definition::handle_goto_definition;
 use crate::handlers::diagnostics::parse_errors_to_diagnostics;
+use crate::handlers::document_highlight::handle_document_highlight;
 use crate::handlers::document_links::handle_document_links;
 use crate::handlers::folding::handle_folding_ranges;
 use crate::handlers::formatting::handle_formatting;
 use crate::handlers::hover::handle_hover;
 use crate::handlers::inlay_hints::handle_inlay_hints;
+use crate::handlers::linked_editing::handle_linked_editing_range;
+use crate::handlers::on_type_formatting::handle_on_type_formatting;
 use crate::handlers::range_formatting::handle_range_formatting;
 use crate::handlers::references::handle_references;
 use crate::handlers::rename::{handle_prepare_rename, handle_rename};
@@ -32,18 +35,20 @@ use lsp_types::notification::{
     PublishDiagnostics,
 };
 use lsp_types::request::{
-    CodeActionRequest, Completion, DocumentLinkRequest, DocumentSymbolRequest, FoldingRangeRequest,
-    Formatting, GotoDefinition, HoverRequest, Initialize, InlayHintRequest, PrepareRenameRequest,
+    CodeActionRequest, Completion, DocumentHighlightRequest, DocumentLinkRequest,
+    DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest,
+    Initialize, InlayHintRequest, LinkedEditingRange, OnTypeFormatting, PrepareRenameRequest,
     RangeFormatting, References, Rename, Request, SelectionRangeRequest, SemanticTokensFullRequest,
     Shutdown, TypeHierarchyPrepare, TypeHierarchySubtypes, TypeHierarchySupertypes,
     WorkspaceSymbolRequest,
 };
 use lsp_types::{
     CodeActionParams, CompletionParams, DiagnosticOptions, DiagnosticServerCapabilities,
-    DocumentFormattingParams, DocumentLinkParams, DocumentRangeFormattingParams,
-    DocumentSymbolParams, FoldingRangeParams, GotoDefinitionParams, HoverParams, InitializeParams,
-    InitializeResult, InlayHintParams, PublishDiagnosticsParams, ReferenceParams, RenameParams,
-    SelectionRangeParams, SemanticTokensParams, ServerCapabilities, ServerInfo,
+    DocumentFormattingParams, DocumentHighlightParams, DocumentLinkParams,
+    DocumentOnTypeFormattingParams, DocumentRangeFormattingParams, DocumentSymbolParams,
+    FoldingRangeParams, GotoDefinitionParams, HoverParams, InitializeParams, InitializeResult,
+    InlayHintParams, LinkedEditingRangeParams, PublishDiagnosticsParams, ReferenceParams,
+    RenameParams, SelectionRangeParams, SemanticTokensParams, ServerCapabilities, ServerInfo,
     TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
     TypeHierarchyPrepareParams, TypeHierarchySubtypesParams, TypeHierarchySupertypesParams, Uri,
     WorkspaceSymbolParams,
@@ -175,6 +180,9 @@ impl MainLoopState {
             TypeHierarchyPrepare::METHOD => self.handle_prepare_type_hierarchy_request(req),
             TypeHierarchySupertypes::METHOD => self.handle_type_hierarchy_supertypes_request(req),
             TypeHierarchySubtypes::METHOD => self.handle_type_hierarchy_subtypes_request(req),
+            DocumentHighlightRequest::METHOD => self.handle_document_highlight_request(req),
+            LinkedEditingRange::METHOD => self.handle_linked_editing_range_request(req),
+            OnTypeFormatting::METHOD => self.handle_on_type_formatting_request(req),
             _ => {
                 tracing::warn!("Unhandled request: {}", req.method);
                 Err(format!("Unhandled request: {}", req.method))
@@ -697,6 +705,81 @@ impl MainLoopState {
 
         // Handle subtypes
         let response = handle_subtypes(&params, &text, &parse_result, uri);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the textDocument/documentHighlight request.
+    fn handle_document_highlight_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: DocumentHighlightParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        let uri = &params.text_document_position_params.text_document.uri;
+
+        // Get document content from VFS
+        let text = if let Some(path) = uri_to_path(uri) {
+            self.vfs.read().get_content(&path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Parse the document
+        let parse_result = parse(&text);
+
+        // Handle document highlight
+        let response = handle_document_highlight(&params, &text, &parse_result);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the textDocument/linkedEditingRange request.
+    fn handle_linked_editing_range_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: LinkedEditingRangeParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        let uri = &params.text_document_position_params.text_document.uri;
+
+        // Get document content from VFS
+        let text = if let Some(path) = uri_to_path(uri) {
+            self.vfs.read().get_content(&path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Parse the document
+        let parse_result = parse(&text);
+
+        // Handle linked editing range
+        let response = handle_linked_editing_range(&params, &text, &parse_result);
+
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    }
+
+    /// Handle the textDocument/onTypeFormatting request.
+    fn handle_on_type_formatting_request(
+        &self,
+        req: lsp_server::Request,
+    ) -> Result<serde_json::Value, String> {
+        let params: DocumentOnTypeFormattingParams =
+            serde_json::from_value(req.params).map_err(|e| e.to_string())?;
+
+        let uri = &params.text_document_position.text_document.uri;
+
+        // Get document content from VFS
+        let text = if let Some(path) = uri_to_path(uri) {
+            self.vfs.read().get_content(&path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Handle on-type formatting (doesn't need parse result)
+        let response = handle_on_type_formatting(&params, &text);
 
         serde_json::to_value(response).map_err(|e| e.to_string())
     }

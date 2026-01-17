@@ -1,5 +1,6 @@
 //! Main LSP server implementation.
 
+use crate::handlers::on_type_formatting::{FIRST_TRIGGER_CHARACTER, MORE_TRIGGER_CHARACTERS};
 use crate::handlers::semantic_tokens::get_capabilities as get_semantic_tokens_capabilities;
 use crate::main_loop::run_main_loop;
 use lsp_server::Connection;
@@ -84,6 +85,19 @@ pub fn start_stdio() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         inlay_hint_provider: Some(lsp_types::OneOf::Left(true)),
         selection_range_provider: Some(lsp_types::SelectionRangeProviderCapability::Simple(true)),
         folding_range_provider: Some(lsp_types::FoldingRangeProviderCapability::Simple(true)),
+        document_highlight_provider: Some(lsp_types::OneOf::Left(true)),
+        linked_editing_range_provider: Some(
+            lsp_types::LinkedEditingRangeServerCapabilities::Simple(true),
+        ),
+        document_on_type_formatting_provider: Some(lsp_types::DocumentOnTypeFormattingOptions {
+            first_trigger_character: FIRST_TRIGGER_CHARACTER.to_string(),
+            more_trigger_character: Some(
+                MORE_TRIGGER_CHARACTERS
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            ),
+        }),
         // Type hierarchy: advertised via experimental until lsp-types adds native support
         experimental: Some(serde_json::json!({
             "typeHierarchyProvider": true
