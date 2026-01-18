@@ -140,3 +140,7 @@ cargo clippy --all-features -- -D warnings # Lint
 cargo fmt --all -- --check                 # Format check
 cargo deny check                           # Security audit
 ```
+
+## TODOs
+
+- [x] **Improve release notes**: Implemented [release-plz](https://release-plz.ieni.dev/) for automated changelog generation from conventional commits. See `RELEASING.md` for details.

@@ -74,6 +74,35 @@ The server also exposes documentation:
 
 - `rustledger://docs/bql` - BQL Query Language Reference
 
+## Development
+
+To develop the MCP server locally with a local build of the WASM package:
+
+```bash
+# Build the WASM package
+cd crates/rustledger-wasm
+wasm-pack build --target web
+
+# Rename package for npm link compatibility
+cd pkg
+sed -i 's/"name": "rustledger-wasm"/"name": "@rustledger\/wasm"/' package.json
+npm link
+
+# Link in the MCP server
+cd ../../../packages/mcp-server
+npm link @rustledger/wasm
+npm install
+npm run build
+```
+
+To unlink and use the published npm package:
+
+```bash
+cd packages/mcp-server
+npm unlink @rustledger/wasm
+npm install
+```
+
 ## License
 
 GPL-3.0
