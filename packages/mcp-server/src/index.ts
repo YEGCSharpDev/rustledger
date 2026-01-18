@@ -953,20 +953,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         ledger.free();
 
+        // Destructure to exclude Set fields, then build clean output
+        const { unique_accounts, unique_currencies, ...baseStats } = stats;
         const output = {
-          ...stats,
-          unique_accounts: stats.unique_accounts.size,
-          unique_currencies: Array.from(stats.unique_currencies),
+          ...baseStats,
+          account_count: unique_accounts.size,
+          currency_count: unique_currencies.size,
+          currencies: Array.from(unique_currencies),
         };
-        delete (output as Record<string, unknown>).unique_accounts;
 
         return {
-          content: [{ type: "text", text: JSON.stringify({
-            ...output,
-            account_count: stats.unique_accounts.size,
-            currency_count: stats.unique_currencies.size,
-            currencies: Array.from(stats.unique_currencies),
-          }, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify(output, null, 2) }],
         };
       }
 
