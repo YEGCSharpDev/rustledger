@@ -107,10 +107,10 @@ impl PriceSource for YahooFinance {
         // Navigate to the price in the response
         let price_value = json
             .get("chart")
-            .and_then(|c: &serde_json::Value| c.get("result"))
-            .and_then(|r: &serde_json::Value| r.get(0))
-            .and_then(|r: &serde_json::Value| r.get("meta"))
-            .and_then(|m: &serde_json::Value| m.get("regularMarketPrice"));
+            .and_then(|c| c.get("result"))
+            .and_then(|r| r.get(0))
+            .and_then(|r| r.get("meta"))
+            .and_then(|m| m.get("regularMarketPrice"));
 
         match price_value {
             Some(v) => {
