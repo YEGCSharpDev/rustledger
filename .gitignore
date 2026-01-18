@@ -18,6 +18,7 @@ Thumbs.db
 /result
 /result-*
 .direnv/
+.pre-commit-config.yaml
 
 # Coverage
 *.profraw
