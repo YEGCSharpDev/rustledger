@@ -464,10 +464,11 @@ function handleFormatCheck(args: ToolArguments | undefined): ToolResponse {
   }
   const formatted = result.formatted || "";
   const isFormatted = source === formatted;
+  const lineDifference = Math.abs(formatted.split("\n").length - source.split("\n").length);
   return textResponse(
     isFormatted
       ? "File is properly formatted."
-      : `File needs formatting. ${formatted.split("\n").length - source.split("\n").length} line(s) would change.`
+      : `File needs formatting. ${lineDifference} line(s) would change.`
   );
 }
 

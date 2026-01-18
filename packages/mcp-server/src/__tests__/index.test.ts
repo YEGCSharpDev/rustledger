@@ -1,24 +1,13 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import * as fs from 'fs';
-import * as path from 'path';
-import { fileURLToPath } from 'url';
 import * as rustledger from '@rustledger/wasm';
-import { initSync } from '@rustledger/wasm';
 import { handleToolCall } from '../handlers.js';
 import { validateArgs, formatErrors, formatQueryResult, textResponse, errorResponse, jsonResponse } from '../helpers.js';
 import { TOOLS } from '../tools.js';
 import { RESOURCES, getResourceContents } from '../resources.js';
 import { PROMPTS, getPrompt } from '../prompts.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Initialize WASM before tests
+// Initialize WASM before tests (nodejs target auto-loads WASM)
 beforeAll(() => {
-  // Load WASM bytes for Node.js environment
-  const wasmPath = path.join(__dirname, '../../node_modules/@rustledger/wasm/rustledger_wasm_bg.wasm');
-  const wasmBytes = fs.readFileSync(wasmPath);
-  initSync({ module: wasmBytes });
   rustledger.init();
 });
 

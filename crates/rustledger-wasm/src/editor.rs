@@ -938,6 +938,7 @@ pub fn get_references_cached(
     if cache.payees.contains(&word) {
         return Some(find_payee_references(
             &word,
+            source,
             parse_result,
             &cache.line_index,
         ));
@@ -1207,6 +1208,7 @@ fn find_currency_references(
 /// Find all references to a payee.
 fn find_payee_references(
     payee: &str,
+    source: &str,
     parse_result: &ParseResult,
     line_index: &LineIndex,
 ) -> EditorReferencesResult {
@@ -1218,14 +1220,25 @@ fn find_payee_references(
                 if txn_payee == payee {
                     let (start_line, _) =
                         line_index.offset_to_position(spanned_directive.span.start);
-                    // Payee is quoted, find it in the line
-                    references.push(EditorReference {
-                        range: EditorRange {
+                    let line_text = get_line(source, start_line as usize);
+
+                    // Find the quoted payee in the line
+                    let range = if let Some(range) =
+                        find_quoted_string_in_line(line_text, payee, start_line)
+                    {
+                        range
+                    } else {
+                        // Fallback: use line start to payee length
+                        EditorRange {
                             start_line,
                             start_character: 0,
                             end_line: start_line,
-                            end_character: 100, // Approximate
-                        },
+                            end_character: payee.len() as u32,
+                        }
+                    };
+
+                    references.push(EditorReference {
+                        range,
                         kind: ReferenceKind::Payee,
                         is_definition: references.is_empty(), // First occurrence is "definition"
                         context: Some("transaction".to_string()),
@@ -1240,6 +1253,21 @@ fn find_payee_references(
         kind: ReferenceKind::Payee,
         references,
     }
+}
+
+/// Find a quoted string in a line and return its range (including quotes).
+fn find_quoted_string_in_line(line: &str, text: &str, line_num: u32) -> Option<EditorRange> {
+    // Look for the text within quotes
+    let quoted = format!("\"{text}\"");
+    if let Some(pos) = line.find(&quoted) {
+        return Some(EditorRange {
+            start_line: line_num,
+            start_character: pos as u32,
+            end_line: line_num,
+            end_character: (pos + quoted.len()) as u32,
+        });
+    }
+    None
 }
 
 /// Find a word in a line and return its range.
