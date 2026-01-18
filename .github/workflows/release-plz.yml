@@ -1,0 +1,101 @@
+# Release-plz Workflow
+# ====================
+# Automates releases using conventional commits:
+# - Creates release PRs with changelog updates
+# - Syncs npm package versions
+# - Creates git tags and GitHub releases
+#
+# Flow:
+# 1. On push to main: Creates/updates a release PR
+# 2. On PR merge: Creates git tag and GitHub release
+# 3. Tag triggers release-build.yml and release-publish.yml
+#
+name: Release-plz
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release-plz:
+    name: Release-plz
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    # Don't run in forks
+    if: github.repository == 'rustledger/rustledger'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run release-plz
+        id: release-plz
+        uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync npm package versions
+        if: steps.release-plz.outputs.pr_created == 'true' || steps.release-plz.outputs.pr_updated == 'true'
+        run: |
+          # Get the version from Cargo.toml
+          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          echo "Syncing npm packages to version $VERSION"
+
+          # Update MCP server package.json version
+          if [ -f "packages/mcp-server/package.json" ]; then
+            sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" packages/mcp-server/package.json
+            echo "Updated packages/mcp-server/package.json"
+          fi
+
+          # Check if there are changes to commit
+          if git diff --quiet packages/; then
+            echo "No npm package changes needed"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add packages/
+            git commit --amend --no-edit
+            git push --force-with-lease
+            echo "npm package versions synced"
+          fi
+
+  # Create release when PR is merged
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    needs: release-plz
+    # Only run if this is a merge of a release-plz PR
+    if: |
+      github.event_name == 'push' &&
+      contains(github.event.head_commit.message, 'chore: release')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run release-plz release
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -4,69 +4,91 @@ This document describes how to release a new version of rustledger.
 
 ## Overview
 
-Releases are automated via GitHub Actions:
+Releases are automated via [release-plz](https://release-plz.ieni.dev/) and GitHub Actions:
 
-1. **You:** Push a version tag (`v0.3.0`)
-2. **`release-build.yml`:** Builds all binaries, creates GitHub Release
-3. **`release-publish.yml`:** Distributes to package managers
+1. **Automatic**: release-plz creates a release PR from conventional commits
+2. **You**: Review and merge the release PR
+3. **Automatic**: Tag is created, triggering build and publish workflows
 
-## Prerequisites
+## How It Works
 
-- You must be on `main` branch
-- All CI checks must be passing
-- `cargo-release` installed: `cargo install cargo-release`
+### Conventional Commits
+
+Version bumps are determined by commit messages:
+
+| Commit Type | Version Bump | Example |
+|-------------|--------------|---------|
+| `fix:` | Patch (0.0.x) | `fix: handle empty input` |
+| `feat:` | Minor (0.x.0) | `feat: add new report type` |
+| `feat!:` or `BREAKING CHANGE:` | Major (x.0.0) | `feat!: change API` |
+
+### Automated Flow
+
+```
+Push to main
+     │
+     ▼
+release-plz creates/updates Release PR
+  • Bumps versions in Cargo.toml
+  • Generates CHANGELOG.md entries
+  • Syncs npm package.json versions
+     │
+     ▼
+You review and merge PR
+     │
+     ▼
+release-plz creates git tag (v0.5.0)
+     │
+     ▼
+release-build.yml builds binaries
+     │
+     ▼
+release-publish.yml distributes to:
+  • npm (@rustledger/wasm, @rustledger/mcp-server)
+  • Docker (ghcr.io/rustledger/rustledger)
+  • Homebrew, Scoop, COPR
+```
 
 ## Release Process
 
-### 1. Create version bump PR
-
-Since `main` is protected, you can't push directly. Create a PR:
+### 1. Write conventional commits
 
 ```bash
-# Ensure you're on main and up to date
-git checkout main && git pull
-
-# Create release branch
-git checkout -b chore/release-vX.Y.Z
-
-# Bump version (updates all Cargo.toml files)
-cargo release minor --no-publish --no-push --no-tag --execute
-# Use: patch (0.2.0 → 0.2.1), minor (0.2.0 → 0.3.0), or major (0.2.0 → 1.0.0)
-
-# Push and create PR
-git push -u origin chore/release-vX.Y.Z
-gh pr create --title "chore: release vX.Y.Z" --body "Bump version to X.Y.Z"
+git commit -m "feat: add balance sheet report"
+git commit -m "fix: handle unicode in account names"
+git push origin main
 ```
 
-### 2. Merge the PR
+### 2. Review the release PR
 
-Wait for CI to pass, then merge via the merge queue.
+release-plz automatically creates a PR titled "chore: release". Review:
 
-### 3. Create and push the tag
+- Version bump is correct
+- Changelog entries look good
+- CI passes
 
-```bash
-git checkout main && git pull
-git tag vX.Y.Z
-git push origin vX.Y.Z
-```
+### 3. Merge the PR
 
-**Important:** Do NOT manually create a GitHub Release. The workflow does this automatically after builds complete.
+Merge via the merge queue. release-plz will:
+
+1. Create a git tag (e.g., `v0.5.0`)
+2. Create a GitHub Release with changelog
 
 ### 4. Monitor the release
 
 ```bash
-# Watch the release build
-gh run watch
+# Watch the build
+gh run list --workflow=release-build.yml --limit 3
 
-# Or check specific workflows
-gh run list --limit 5
+# Watch the publish
+gh run list --workflow=release-publish.yml --limit 3
 ```
 
 The release takes ~30-45 minutes to build all platforms.
 
 ## What Gets Released
 
-### Binaries (10 targets)
+### Binaries (8 targets)
 
 | Platform | Target |
 |----------|--------|
@@ -90,47 +112,63 @@ The release takes ~30-45 minutes to build all platforms.
 | Scoop | `rustledger/scoop-rustledger` |
 | COPR | `copr.fedoraproject.org/rustledger` |
 
-## Troubleshooting
-
-### Release Publish failed
-
-If `release-publish.yml` fails but `release-build.yml` succeeded:
-
-```bash
-# Re-run just the publish workflow
-gh run rerun <run-id>
-```
-
-### Race condition (publish before build)
-
-This happens if you manually create a GitHub Release before builds complete. The workflow creates the release automatically—don't create it manually.
-
-### Protected branch prevents push
-
-Use the PR workflow described above instead of pushing directly to main.
-
-### cargo-release not found
-
-```bash
-cargo install cargo-release
-```
-
 ## Configuration
 
-### `release.toml`
+### `release-plz.toml`
 
 ```toml
-shared-version = true       # All crates share same version
-tag-prefix = "v"            # Tags: v0.3.0
-publish = false             # CI handles crates.io
-push = true                 # Default; we override with --no-push for protected branches
-allow-branch = ["main"]     # Only release from main
+[workspace]
+semver_check = true           # Use conventional commits for versioning
+changelog_update = true       # Generate changelog
+git_tag_enable = true         # Create git tags
+git_release_enable = true     # Create GitHub releases
+publish = false               # CI handles crates.io publishing
+
+[changelog]
+commit_parsers = [...]        # Map commit types to changelog sections
 ```
 
 ### Workflow files
 
-- `.github/workflows/release-build.yml` - Builds binaries, creates release
-- `.github/workflows/release-publish.yml` - Distributes to package managers
+| File | Purpose |
+|------|---------|
+| `release-plz.yml` | Creates release PRs, syncs npm versions |
+| `release-build.yml` | Builds binaries, creates GitHub Release |
+| `release-publish.yml` | Distributes to package managers |
+
+## Troubleshooting
+
+### Release PR not created
+
+Check that commits follow conventional commit format:
+```bash
+git log --oneline -10
+```
+
+### Release publish failed
+
+Re-run just the publish workflow:
+```bash
+gh run rerun <run-id>
+```
+
+### Manual release (emergency)
+
+If automation fails, you can still release manually:
+
+```bash
+# Update version
+cargo set-version 0.5.0 --workspace
+
+# Update npm packages
+sed -i 's/"version": "[^"]*"/"version": "0.5.0"/' packages/mcp-server/package.json
+
+# Commit and tag
+git add -A
+git commit -m "chore: release v0.5.0"
+git tag v0.5.0
+git push origin main --tags
+```
 
 ## Version Numbering
 
