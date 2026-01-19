@@ -7,6 +7,13 @@ on:
     branches: [main]
   merge_group:
     branches: [main]
+  # Allow manual triggering (useful for bot PRs where GITHUB_TOKEN can't trigger workflows)
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to run CI on'
+        required: false
+        default: ''
 
 permissions:
   contents: read

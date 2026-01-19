@@ -247,7 +247,13 @@
                     exit 0
                   fi
 
-                  PATTERN="^(feature|fix|docs|chore|refactor|claude)/[a-zA-Z0-9][a-zA-Z0-9-]*$"
+                  # Allow release-plz branches (e.g., release-plz-2026-01-18T17-10-14Z)
+                  if [[ "$BRANCH" =~ ^release-plz- ]]; then
+                    echo "✅ Branch name '$BRANCH' is valid (release-plz)"
+                    exit 0
+                  fi
+
+                  PATTERN="^(feature|fix|docs|chore|refactor|release|hotfix|claude|dependabot|copilot)/[a-zA-Z0-9][a-zA-Z0-9/_-]*$"
 
                   if [[ "$BRANCH" =~ $PATTERN ]]; then
                     echo "✅ Branch name '$BRANCH' is valid"
@@ -256,8 +262,8 @@
                     echo "❌ Branch name '$BRANCH' does not match pattern"
                     echo ""
                     echo "Branch names must follow: <type>/<description>"
-                    echo "  Types: feature, fix, docs, chore, refactor, claude"
-                    echo "  Description: letters, numbers, hyphens (must start with letter/number)"
+                    echo "  Types: feature, fix, docs, chore, refactor, release, hotfix, claude, dependabot, copilot"
+                    echo "  Description: letters, numbers, hyphens, underscores, slashes"
                     echo ""
                     echo "Examples:"
                     echo "  feature/add-csv-export"
