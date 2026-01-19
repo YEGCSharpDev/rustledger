@@ -88,7 +88,11 @@ jobs:
       - name: Install cargo-semver-checks
         uses: taiki-e/install-action@cargo-semver-checks
       - name: Check semver compatibility
-        run: cargo semver-checks check-release --all-features
+        # Exclude unpublished crates (rustledger-lsp, rustledger-wasm)
+        run: |
+          cargo semver-checks check-release --all-features \
+            --exclude rustledger-lsp \
+            --exclude rustledger-wasm
 
   # MSRV check - verify minimum supported Rust version (rust-version in Cargo.toml)
   msrv:
