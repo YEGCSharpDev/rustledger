@@ -37,7 +37,8 @@
     };
   };
 
-  outputs = inputs@{ flake-parts, ... }:
+  outputs =
+    inputs@{ flake-parts, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
       imports = [
         inputs.treefmt-nix.flakeModule
@@ -53,7 +54,16 @@
         "aarch64-darwin"
       ];
 
-      perSystem = { config, self', inputs', pkgs, system, lib, ... }:
+      perSystem =
+        {
+          config,
+          self',
+          inputs',
+          pkgs,
+          system,
+          lib,
+          ...
+        }:
         let
           # Rust toolchain with all needed components
           rustToolchain = inputs'.fenix.packages.stable.withComponents [
@@ -91,7 +101,8 @@
 
             buildInputs = [
               # Add platform-specific deps here
-            ] ++ lib.optionals pkgs.stdenv.isDarwin [
+            ]
+            ++ lib.optionals pkgs.stdenv.isDarwin [
               pkgs.libiconv
               pkgs.darwin.apple_sdk.frameworks.Security
               pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
@@ -106,16 +117,21 @@
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
           # Build the crate
-          rustledger = craneLib.buildPackage (commonArgs // {
-            inherit cargoArtifacts;
-          });
+          rustledger = craneLib.buildPackage (
+            commonArgs
+            // {
+              inherit cargoArtifacts;
+            }
+          );
 
           # Python with beancount for compatibility testing
-          pythonWithBeancount = pkgs.python311.withPackages (ps: with ps; [
-            beancount
-            beanquery  # For bean-query CLI (BQL)
-            pytest
-          ]);
+          pythonWithBeancount = pkgs.python311.withPackages (
+            ps: with ps; [
+              beancount
+              beanquery # For bean-query CLI (BQL)
+              pytest
+            ]
+          );
 
           # Development tools
           devTools = with pkgs; [
@@ -329,16 +345,22 @@
             rustledger = rustledger;
 
             # Documentation
-            doc = craneLib.cargoDoc (commonArgs // {
-              inherit cargoArtifacts;
-            });
+            doc = craneLib.cargoDoc (
+              commonArgs
+              // {
+                inherit cargoArtifacts;
+              }
+            );
 
             # WASM build
-            wasm = craneLib.buildPackage (commonArgs // {
-              inherit cargoArtifacts;
-              cargoExtraArgs = "--target wasm32-unknown-unknown -p rustledger-wasm";
-              CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
-            });
+            wasm = craneLib.buildPackage (
+              commonArgs
+              // {
+                inherit cargoArtifacts;
+                cargoExtraArgs = "--target wasm32-unknown-unknown -p rustledger-wasm";
+                CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
+              }
+            );
           };
 
           # Checks
@@ -346,15 +368,21 @@
             inherit rustledger;
 
             # Clippy
-            clippy = craneLib.cargoClippy (commonArgs // {
-              inherit cargoArtifacts;
-              cargoClippyExtraArgs = "--all-targets -- --deny warnings";
-            });
+            clippy = craneLib.cargoClippy (
+              commonArgs
+              // {
+                inherit cargoArtifacts;
+                cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+              }
+            );
 
             # Tests
-            test = craneLib.cargoTest (commonArgs // {
-              inherit cargoArtifacts;
-            });
+            test = craneLib.cargoTest (
+              commonArgs
+              // {
+                inherit cargoArtifacts;
+              }
+            );
 
             # Formatting
             fmt = craneLib.cargoFmt {
@@ -373,15 +401,21 @@
             };
 
             # Doc build
-            doc = craneLib.cargoDoc (commonArgs // {
-              inherit cargoArtifacts;
-              RUSTDOCFLAGS = "-D warnings";
-            });
+            doc = craneLib.cargoDoc (
+              commonArgs
+              // {
+                inherit cargoArtifacts;
+                RUSTDOCFLAGS = "-D warnings";
+              }
+            );
 
             # Coverage
-            coverage = craneLib.cargoLlvmCov (commonArgs // {
-              inherit cargoArtifacts;
-            });
+            coverage = craneLib.cargoLlvmCov (
+              commonArgs
+              // {
+                inherit cargoArtifacts;
+              }
+            );
           };
 
           # Development shell
@@ -395,24 +429,47 @@
               echo "🦀 rustledger development environment"
               echo ""
               echo "Available commands:"
-              echo "  cargo build       - Build the project"
-              echo "  cargo test        - Run tests"
-              echo "  cargo clippy      - Run linter"
-              echo "  just              - Show available tasks"
-              echo "  nix flake check   - Run all checks"
-              echo "  treefmt           - Format all files"
+              echo "  cargo build        - Build the project"
+              echo "  cargo test         - Run tests"
+              echo "  cargo clippy       - Run linter"
+              echo "  just               - Show available tasks"
+              echo "  nix flake check    - Run all checks"
+              echo "  treefmt            - Format all files"
+              echo "  opencode-container - Run opencode in container"
               echo ""
               echo "Tools available:"
               echo "  - Rust: $(rustc --version)"
               echo "  - WASM: wasm32-unknown-unknown target"
-              echo "  - TLA+: $(which tlc 2>/dev/null && echo 'tlc available' || echo 'tlaplus')"
+              echo "  - TLA+: $(tlc -help 2>/dev/null | head -1 || echo 'not available')"
               echo "  - Python: $(python --version) with beancount"
+              echo "  - Podman: $(podman --version)"
               echo ""
+
+              # OpenCode container alias (requires sops-nix secrets)
+              if [[ -f /run/secrets/api/together-ai && \
+                    -f /run/secrets/user/email && \
+                    -f /run/secrets/user/realName ]]; then
+                alias opencode-container='podman run -v $(pwd):/data:Z \
+                    -v /nix/store:/nix/store:ro \
+                    -v ~/.opencode:/home/nixuser/.opencode \
+                    --userns=keep-id \
+                    --rm -ti \
+                    -e TOGETHER_API_KEY="$(cat /run/secrets/api/together-ai)" \
+                    -e GIT_AUTHOR_NAME="$(cat /run/secrets/user/realName)" \
+                    -e GIT_AUTHOR_EMAIL="$(cat /run/secrets/user/email)" \
+                    -e GIT_COMMITTER_NAME="$(cat /run/secrets/user/realName)" \
+                    -e GIT_COMMITTER_EMAIL="$(cat /run/secrets/user/email)" \
+                    ghcr.io/grigio/docker-nixuser:latest \
+                    opencode'
+              else
+                alias opencode-container='echo "Missing sops-nix secrets. Required: api/together-ai, user/email, user/realName"'
+              fi
             '';
 
             packages = devTools ++ [
               rustToolchainWithWasm
               config.treefmt.build.wrapper
+              pkgs.podman
             ];
 
             # Environment variables
@@ -498,6 +555,7 @@
               echo ""
             '';
           };
+
         };
     };
 }
