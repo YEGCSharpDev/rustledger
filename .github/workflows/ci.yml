@@ -94,6 +94,8 @@ jobs:
   msrv:
     name: MSRV (1.75)
     runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: ""  # Disable sccache for MSRV check
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.75
@@ -105,6 +107,8 @@ jobs:
   deny:
     name: Cargo Deny
     runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: ""  # Disable sccache for deny check
     steps:
       - uses: actions/checkout@v4
       - uses: taiki-e/install-action@cargo-deny
@@ -117,6 +121,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RUST_MIN_STACK: 8388608
+      RUSTC_WRAPPER: ""  # Disable sccache for coverage
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
