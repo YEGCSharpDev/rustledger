@@ -90,6 +90,27 @@ jobs:
       - name: Check semver compatibility
         run: cargo semver-checks check-release --all-features
 
+  # MSRV check - verify minimum supported Rust version (rust-version in Cargo.toml)
+  msrv:
+    name: MSRV (1.75)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.75
+      - uses: Swatinem/rust-cache@v2
+      - name: Check MSRV compatibility
+        run: cargo check --workspace --all-features
+
+  # Security and license audit
+  deny:
+    name: Cargo Deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@cargo-deny
+      - name: Check advisories, licenses, and bans
+        run: cargo deny check
+
   # Coverage runs separately (uses llvm-cov, not sccache-compatible)
   coverage:
     name: Code Coverage
