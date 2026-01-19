@@ -279,6 +279,37 @@
                 pass_filenames = false;
                 always_run = true;
               };
+
+              # Run tests before push to catch failures before CI
+              cargo-test = {
+                enable = true;
+                name = "cargo-test";
+                entry = "${pkgs.writeShellScript "cargo-test" ''
+                  echo "Running cargo test (library tests only for speed)..."
+                  cargo test --workspace --lib --quiet
+                ''}";
+                language = "system";
+                stages = [ "pre-push" ];
+                pass_filenames = false;
+                always_run = true;
+              };
+
+              # Check documentation builds without warnings
+              cargo-doc = {
+                enable = true;
+                name = "cargo-doc";
+                entry = "${pkgs.writeShellScript "cargo-doc" ''
+                  echo "Checking documentation..."
+                  RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --quiet 2>&1 | head -20 || {
+                    echo "Documentation has warnings. Run 'cargo doc' to see details."
+                    exit 1
+                  }
+                ''}";
+                language = "system";
+                stages = [ "pre-push" ];
+                pass_filenames = false;
+                always_run = true;
+              };
             };
           };
 
