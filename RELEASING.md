@@ -163,6 +163,26 @@ Re-run just the publish workflow:
 gh run rerun <run-id>
 ```
 
+### Tag already exists error
+
+If release-plz fails with "Reference already exists" for the tag:
+
+```bash
+# 1. Delete the tag locally and remotely
+git push --delete origin v0.5.0
+git tag -d v0.5.0
+
+# 2. Create a PR with "chore: release" in the commit message
+git checkout -b chore/trigger-release
+git commit --allow-empty -m "chore: release v0.5.0"
+git push -u origin chore/trigger-release
+gh pr create --title "chore: release v0.5.0" --body "Retrigger release after tag fix"
+
+# 3. Merge the PR to trigger the Release job
+```
+
+The `Release` job only runs when the commit message contains `chore: release`.
+
 ### Manual release (emergency)
 
 If automation fails, you can still release manually:
