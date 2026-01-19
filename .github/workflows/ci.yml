@@ -73,6 +73,8 @@ jobs:
           RUSTDOCFLAGS: ${{ matrix.env == 'RUSTDOCFLAGS=-Dwarnings' && '-Dwarnings' || '' }}
 
   # Semver check - detect breaking API changes
+  # Uses official action with built-in rustdoc caching (~50% faster)
+  # Only runs when Rust code changes (skips for docs/CI-only changes)
   semver:
     name: Semver Check
     runs-on: ubuntu-latest
@@ -80,19 +82,24 @@ jobs:
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
+      - name: Check for Rust changes
+        id: changes
+        uses: dorny/paths-filter@v3
         with:
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: mozilla-actions/sccache-action@v0.0.9
-      - uses: Swatinem/rust-cache@v2
-      - name: Install cargo-semver-checks
-        uses: taiki-e/install-action@cargo-semver-checks
+          filters: |
+            rust:
+              - '**/*.rs'
+              - '**/Cargo.toml'
+              - 'Cargo.lock'
       - name: Check semver compatibility
-        # Exclude unpublished crates (rustledger-lsp, rustledger-wasm)
-        run: |
-          cargo semver-checks check-release --all-features \
-            --exclude rustledger-lsp \
-            --exclude rustledger-wasm
+        if: steps.changes.outputs.rust == 'true'
+        uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          feature-group: all-features
+          exclude: rustledger-lsp,rustledger-wasm
+      - name: Skip semver check
+        if: steps.changes.outputs.rust != 'true'
+        run: echo "No Rust changes detected, skipping semver check"
 
   # MSRV check - verify minimum supported Rust version (rust-version in Cargo.toml)
   msrv:
