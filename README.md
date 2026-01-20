@@ -18,26 +18,31 @@ Parse and validate your ledger faster than Python beancount.
 
 | | |
 |---|---|
-| **Much faster** | Parse and validate large ledgers in milliseconds ([see benchmarks](#performance)) |
-| **Single binary** | No Python, no dependencies, just download and run |
+| **10-30x faster** | Parse and validate large ledgers in milliseconds ([see benchmarks](#performance)) |
+| **No dependencies** | No Python runtime, no libraries to install |
 | **Drop-in replacement** | Compatible `bean-*` CLI commands for easy migration |
 | **Full compatibility** | Parses any valid beancount file |
+| **Editor support** | LSP server for VS Code, Neovim, Helix, and more |
+| **AI-ready** | MCP server for Claude, Cursor, and other AI assistants |
+| **Runs anywhere** | WebAssembly support for browser and Node.js |
+| **Better errors** | Detailed error messages with source locations |
+| **20 built-in plugins** | Plus Python plugin compatibility via WASI sandbox |
 
 ## Install
 
 | Platform | Command |
 |----------|---------|
-| **Script** | `curl -sSfL rustledger.github.io/i \| sh` |
 | **macOS** | `brew install rustledger/rustledger/rustledger` |
-| **Ubuntu/Debian** | `sudo add-apt-repository ppa:robcohen/rustledger && sudo apt install rustledger` |
-| **Fedora/RHEL** | `sudo dnf copr enable rustledger/rustledger && sudo dnf install rustledger` |
-| **Arch** | `yay -S rustledger-bin` |
 | **Windows** | `scoop bucket add rustledger https://github.com/rustledger/scoop-rustledger && scoop install rustledger` |
 | **Cargo** | `cargo binstall rustledger` or `cargo install rustledger` |
+| **Fedora/RHEL** | `sudo dnf copr enable robcohen/rustledger && sudo dnf install rustledger` |
 | **Nix** | `nix run github:rustledger/rustledger` |
 | **Docker** | `docker run --rm -v "$PWD:/data" ghcr.io/rustledger/rustledger /data/ledger.beancount` |
 | **Binaries** | [GitHub Releases](https://github.com/rustledger/rustledger/releases) |
-| **npm** | `npm install @rustledger/wasm` (WebAssembly) |
+| **npm (WASM)** | `npm install @rustledger/wasm` |
+| **npm (MCP)** | `npx @rustledger/mcp-server` ([Model Context Protocol](https://modelcontextprotocol.io) server) |
+
+<sub>Missing your platform? [Open an issue](https://github.com/rustledger/rustledger/issues/new) to request it.</sub>
 
 ## Quick Start
 
@@ -96,6 +101,7 @@ rledger-format --in-place ledger.beancount
 | `rustledger-query` | BQL query engine |
 | `rustledger-plugin` | 20 built-in plugins + Python plugin support |
 | `rustledger-importer` | CSV/OFX import framework |
+| `rustledger-lsp` | Language Server Protocol for editor integration |
 | `rustledger-wasm` | WebAssembly bindings for JavaScript/TypeScript |
 
 <details>
