@@ -23,6 +23,7 @@ jobs:
       # Use GitHub API to get diff instead of checking out untrusted PR code
       - name: Get diff of the pull request
         id: get_diff
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
